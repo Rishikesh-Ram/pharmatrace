@@ -1,0 +1,9 @@
+.env
+__pycache__/
+venv/
+.venv/
+build/
+.dart_tool/
+node_modules/
+*.keras
+.DS_Store
