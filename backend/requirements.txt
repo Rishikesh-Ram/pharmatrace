@@ -1,0 +1,9 @@
+flask
+flask-cors
+web3
+requests
+pillow
+numpy
+tensorflow
+pytesseract
+python-dotenv
