@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'verify_screen.dart';
 import 'manufacturer_screen.dart';
+import 'register_batch_screen.dart';
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -58,13 +59,13 @@ onPressed: () => Navigator.push(context,
                   ),
                 ),
                                 const SizedBox(height: 12),
-                TextButton.icon(
-                  onPressed: () => Navigator.push(context,
-                      MaterialPageRoute(
-                          builder: (_) => const ManufacturerScreen())),
-                  icon: const Icon(Icons.factory),
-                  label: const Text('Manufacturer: register batch'),
-                ),
+TextButton.icon(
+  onPressed: () => Navigator.push(context,
+      MaterialPageRoute(
+          builder: (_) => const RegisterBatchScreen())),
+  icon: const Icon(Icons.factory),
+  label: const Text('Manufacturer: register batch'),
+),
               ],
             ),
           ),

@@ -7,3 +7,16 @@ build/
 node_modules/
 *.keras
 .DS_Store
+
+# Python virtual environments
+backend/.venv/
+backend/.venv312/
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment secrets
+.env
