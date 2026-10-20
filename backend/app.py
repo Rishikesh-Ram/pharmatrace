@@ -1,11 +1,10 @@
 """Starts the server and defines /verify  ->  Verified | Suspicious | Unverified"""
 import io
 import logging
-
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()  # must run before the services read their settings
-
+load_dotenv(Path(__file__).resolve().parent / ".env")
 import os  # noqa: E402
 
 from flask import Flask, jsonify, request  # noqa: E402
@@ -148,6 +147,80 @@ def lookup(medicine_id):
 def health():
     return jsonify(status="ok", chain_connected=blockchain.is_connected(),
                    model_installed=vision.is_installed())
+
+
+from datetime import datetime, timezone, timedelta
+
+
+
+@app.route("/register", methods=["POST"])
+def register():
+    """Upload a medicine reference image to IPFS and register it on-chain."""
+    medicine_id = request.form.get("medicine_id", "").strip()
+    name = request.form.get("name", "").strip()
+    batch = request.form.get("batch", "").strip()
+    expiry = request.form.get("expiry", "").strip()
+    file = request.files.get("image")
+
+    if not all([medicine_id, name, batch, expiry, file]):
+        return jsonify(
+            error="Required fields: medicine_id, name, batch, expiry, image."
+        ), 400
+
+    try:
+        expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify(
+            error=f"Invalid expiry date received: {expiry!r}. Use YYYY-MM-DD."
+        ), 400
+
+    try:
+        # Keep the medicine valid through the entire expiry date.
+        expiry_timestamp = int(
+            datetime.combine(
+                expiry_date + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ).timestamp()
+        )
+
+        if expiry_timestamp <= int(datetime.now(timezone.utc).timestamp()):
+            return jsonify(
+                error="Expiry date must be today or in the future."
+            ), 400
+
+        image_bytes = file.read()
+        if not image_bytes:
+            return jsonify(error="The uploaded image is empty."), 400
+
+        image_cid = ipfs.upload_image(
+            image_bytes,
+            file.filename or "reference.jpg",
+        )
+
+        tx_hash = blockchain.register_medicine(
+            medicine_id,
+            name,
+            batch,
+            expiry_timestamp,
+            image_cid,
+        )
+
+        return jsonify(
+            success=True,
+            medicine_id=medicine_id,
+            name=name,
+            batch=batch,
+            expiry=expiry,
+            image_cid=image_cid,
+            transaction_hash=tx_hash,
+            message="Medicine registered successfully on the blockchain.",
+        ), 201
+
+    except Exception as exc:
+        app.logger.exception("Medicine registration failed")
+        return jsonify(error=f"{type(exc).__name__}: {exc}"), 500
+
 
 
 if __name__ == "__main__":

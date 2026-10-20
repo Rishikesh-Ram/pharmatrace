@@ -145,3 +145,50 @@ def read_history(medicine_id: str):
         })
 
     return history
+
+def register_medicine(
+    medicine_id: str,
+    name: str,
+    batch: str,
+    expiry_timestamp: int,
+    image_cid: str,
+) -> str:
+    """Register a medicine on the local development blockchain."""
+    private_key = os.getenv("MANUFACTURER_PRIVATE_KEY", "").strip()
+    if not private_key:
+        raise RuntimeError("MANUFACTURER_PRIVATE_KEY is not configured")
+
+    if not is_connected():
+        raise RuntimeError("Blockchain node is unavailable")
+
+    contract = _get_contract()
+    account = w3.eth.account.from_key(private_key)
+
+    # Ensure this wallet has manufacturer permission before sending.
+    if not contract.functions.isManufacturer(account.address).call():
+        raise RuntimeError(
+            "This wallet is not an authorized manufacturer"
+        )
+
+    tx = contract.functions.registerMedicine(
+        medicine_id,
+        name,
+        batch,
+        int(expiry_timestamp),
+        image_cid,
+    ).build_transaction({
+        "from": account.address,
+        "nonce": w3.eth.get_transaction_count(account.address),
+        "chainId": w3.eth.chain_id,
+        "gas": 500000,
+        "gasPrice": w3.eth.gas_price,
+    })
+
+    signed_tx = w3.eth.account.sign_transaction(tx, private_key)
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+    if receipt.status != 1:
+        raise RuntimeError("Medicine registration transaction failed")
+
+    return tx_hash.hex()

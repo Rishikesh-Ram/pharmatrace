@@ -4,15 +4,23 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'consumer/scan_screen.dart';
 class VerifyScreen extends StatefulWidget {
-  const VerifyScreen({super.key});
+const VerifyScreen({super.key, this.initialMedicineId});
 
+final String? initialMedicineId;
   @override
   State<VerifyScreen> createState() => _VerifyScreenState();
 }
 
 class _VerifyScreenState extends State<VerifyScreen> {
-  final _controller = TextEditingController();
-  VerifyResult? _result;
+late final TextEditingController _controller;
+
+@override
+void initState() {
+  super.initState();
+  _controller = TextEditingController(
+    text: widget.initialMedicineId ?? '',
+  );
+}  VerifyResult? _result;
   bool _loading = false;
   XFile? _selectedImage;
 Map<String, dynamic>? _imageResult;
