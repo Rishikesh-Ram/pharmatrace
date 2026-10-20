@@ -1,0 +1,45 @@
+
+{
+  "reference_images": [
+    {
+      "file": "packet_front.jpg",
+      "component": "packet",
+      "view": "front"
+    },
+    {
+      "file": "packet_back.jpg",
+      "component": "packet",
+      "view": "back"
+    },
+    {
+      "file": "packet_longside1.jpg",
+      "component": "packet",
+      "view": "long_side_1"
+    },
+    {
+      "file": "packet_longside2.jpg",
+      "component": "packet",
+      "view": "long_side_2"
+    },
+    {
+      "file": "packet_shortside1.jpg",
+      "component": "packet",
+      "view": "short_side_1"
+    },
+    {
+      "file": "packet_shortside2.jpg",
+      "component": "packet",
+      "view": "short_side_2"
+    },
+    {
+      "file": "strip_front.jpg",
+      "component": "strip",
+      "view": "front"
+    },
+    {
+      "file": "strip_back.jpg",
+      "component": "strip",
+      "view": "back"
+    }
+  ]
+}

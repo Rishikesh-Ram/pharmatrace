@@ -4,9 +4,21 @@ import os
 import numpy as np
 from PIL import Image
 
-MODEL_PATH = os.getenv("MODEL_PATH", "model/pharmatrace_model.keras")
+
+MODEL_PATH = os.getenv(
+    "MODEL_PATH",
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "model",
+        "pharmatrace_model.keras",
+    ),
+)
+MODEL_PATH = os.path.abspath(MODEL_PATH)
+
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.80"))
 MODEL_RESCALE = os.getenv("MODEL_RESCALE", "true").lower() == "true"
+
 
 
 class ModelNotReady(Exception):
@@ -35,9 +47,14 @@ def get_model():
 
 
 def _preprocess(img: Image.Image, size):
-    arr = np.asarray(img.convert("RGB").resize(size), dtype="float32")
-    if MODEL_RESCALE:
-        arr /= 255.0
+    arr = np.asarray(
+        img.convert("RGB").resize(size),
+        dtype="float32",
+    )
+
+    # MobileNetV2 expects pixel values in the range [-1, 1].
+    arr = arr / 127.5 - 1.0
+
     return np.expand_dims(arr, 0)
 
 

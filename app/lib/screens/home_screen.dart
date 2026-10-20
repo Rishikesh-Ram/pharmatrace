@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'verify_screen.dart';
-import 'manufacturer_screen.dart';
 import 'register_batch_screen.dart';
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});

@@ -96,3 +96,52 @@ def read_record(medicine_id: str):
     except Exception:
         record["expired"] = False
     return record
+
+def find_record(medicine_id: str):
+    """Find a medicine by its registered ID or batch number."""
+    query = medicine_id.strip()
+    if not query:
+        return None
+
+    # First, try the actual medicine ID.
+    record = read_record(query)
+    if record is not None:
+        return record
+
+    # If the input was a batch number, search registration events.
+    try:
+        contract = _get_contract()
+        events = contract.events.MedicineRegistered.get_logs(
+            from_block=0,
+            to_block="latest",
+        )
+
+        for event in reversed(events):
+            registered_id = event["args"].get("id", "")
+            if not registered_id:
+                continue
+
+            record = read_record(registered_id)
+            if record and str(record.get("batch", "")).strip().casefold() == query.casefold():
+                return record
+    except Exception:
+        pass
+
+    return None
+
+
+def read_history(medicine_id: str):
+    """Read the actual transfer history stored in the smart contract."""
+    contract = _get_contract()
+    entries = contract.functions.getHistory(medicine_id).call()
+
+    history = []
+    for entry in entries:
+        sender, recipient, timestamp = entry
+        history.append({
+            "from": str(sender),
+            "to": str(recipient),
+            "timestamp": int(timestamp),
+        })
+
+    return history

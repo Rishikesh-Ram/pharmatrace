@@ -77,9 +77,28 @@ def verify():
         reference = ipfs.fetch_image(record["ipfs_cid"])
         score = vision.similarity(uploaded, reference)
         image_ok = score >= vision.SIMILARITY_THRESHOLD
+
     except Exception as e:
         image_error = str(e)
         log.error("Image comparison failed: %s", e)
+
+        return jsonify(
+            verdict="Unverified",
+            reason=(
+                "Image comparison unavailable. "
+                "A valid reference image must be configured."
+            ),
+            medicine_id=medicine_id,
+            details={
+                **record_details,
+                "image_ok": False,
+                "similarity": None,
+                "threshold": vision.SIMILARITY_THRESHOLD,
+                "image_error": image_error,
+            },
+            ocr=ocr_result,
+        )
+
 
     # (d) verdict
     return jsonify(
@@ -91,6 +110,39 @@ def verify():
         ocr=ocr_result,
     )
 
+
+@app.route("/lookup/<path:medicine_id>", methods=["GET"])
+def lookup(medicine_id):
+    if not blockchain.is_connected():
+        return jsonify(error="Blockchain node is unavailable."), 503
+
+    try:
+        record = blockchain.find_record(medicine_id)
+        if record is None:
+            return jsonify(
+                found=False,
+                medicine_id=medicine_id,
+                message="No matching medicine ID or batch number found.",
+            ), 404
+
+        history = blockchain.read_history(record["raw"]["id"])
+
+        return jsonify(
+            found=True,
+            medicine_id=record["raw"]["id"],
+            name=record["name"],
+            batch=record["batch"],
+            manufacturer=record["manufacturer"],
+            expiry=record["expiry"],
+            expired=record["expired"],
+            recalled=record["recalled"],
+            recall_reason=record["recall_reason"],
+            current_owner=record["raw"].get("currentOwner", ""),
+            history=history,
+        )
+    except Exception:
+        app.logger.exception("Blockchain lookup failed")
+        return jsonify(error="Could not read the blockchain record."), 500
 
 @app.route("/health")
 def health():
