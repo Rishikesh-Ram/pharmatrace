@@ -162,12 +162,17 @@ def register_medicine(
         raise RuntimeError("Blockchain node is unavailable")
 
     contract = _get_contract()
+   
     account = w3.eth.account.from_key(private_key)
 
-    # Ensure this wallet has manufacturer permission before sending.
-    if not contract.functions.isManufacturer(account.address).call():
+    # Check the role and active status using the current contract.
+    user = contract.functions.users(account.address).call()
+    role = int(user[0])
+    status = int(user[1])
+
+    if role != 2 or status != 1:
         raise RuntimeError(
-            "This wallet is not an authorized manufacturer"
+            f"Wallet must be an active manufacturer (role={role}, status={status})"
         )
 
     tx = contract.functions.registerMedicine(
@@ -176,6 +181,7 @@ def register_medicine(
         batch,
         int(expiry_timestamp),
         image_cid,
+        100,
     ).build_transaction({
         "from": account.address,
         "nonce": w3.eth.get_transaction_count(account.address),
@@ -183,6 +189,7 @@ def register_medicine(
         "gas": 500000,
         "gasPrice": w3.eth.gas_price,
     })
+
 
     signed_tx = w3.eth.account.sign_transaction(tx, private_key)
     tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
