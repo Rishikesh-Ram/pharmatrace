@@ -14,6 +14,7 @@ Tests the entire lifecycle:
 import io
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -25,7 +26,7 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 from app import app
-from services import blockchain
+from services import auth, blockchain
 
 
 def run_e2e_test():
@@ -33,7 +34,42 @@ def run_e2e_test():
     print("PHARMATRACE END-TO-END WORKFLOW INTEGRATION TEST")
     print("=" * 60)
 
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        os.environ["PHARMATRACE_AUTH_STORE_PATH"] = str(Path(tmp_dir) / "test_auth_store.json")
+        os.environ["PHARMATRACE_KEY_STORE_PATH"] = str(Path(tmp_dir) / "test_server_keys.json")
+        try:
+            _run_e2e_steps()
+        finally:
+            os.environ.pop("PHARMATRACE_AUTH_STORE_PATH", None)
+            os.environ.pop("PHARMATRACE_KEY_STORE_PATH", None)
+
+
+def _run_e2e_steps():
     client = app.test_client()
+
+    # 0. Verify Clean Initial State & One-Time Admin Bootstrap
+    res_status = client.get("/api/auth/admin-status")
+    assert res_status.status_code == 200
+    assert res_status.json["admin_provisioned"] is False, "Fresh auth store should have no admin provisioned"
+
+    res_boot = client.post("/api/auth/bootstrap-admin", json={
+        "username": "admin",
+        "email": "admin@pharmatrace.local",
+        "password": "Admin@123",
+        "org_name": "PharmaTrace Regulatory Authority",
+    })
+    assert res_boot.status_code == 201, f"Admin bootstrap failed: {res_boot.json}"
+
+    res_boot_dup = client.post("/api/auth/bootstrap-admin", json={
+        "username": "admin2",
+        "email": "admin2@pharmatrace.local",
+        "password": "Admin@123",
+    })
+    assert res_boot_dup.status_code == 403
+    assert res_boot_dup.json["code"] == "ADMIN_ALREADY_PROVISIONED"
+
+    # Seed isolated test fixtures for Manufacturer, Distributor, Pharmacy in the temporary test store
+    auth.seed_test_accounts()
 
     # 1. Health check
     res = client.get("/health")
@@ -318,28 +354,6 @@ def run_e2e_test():
     assert res_rec_lookup.json["recalled"] is True
     assert "Quality control" in res_rec_lookup.json["recall_reason"]
     print("[PASS] 14. On-chain medicine recall executed and verified.")
-
-    # Ensure demo batches exist at Stage 1, Stage 2, and Stage 3 for live dashboard queues
-    if blockchain.find_record("PT-TEST-002") is None:
-        blockchain.register_medicine(
-            "PT-TEST-002", "Calcitriol Soft Gelatin Capsules", "13606265",
-            expiry_ts, "QmRPfUZb5v52nNjgV6wWE7biJnaHJbY9voczuVT25qujvr", 500
-        )
-        blockchain.distributor_receive("PT-TEST-002", "Verified at MedLine Central Hub (20C)")
-        blockchain.pharmacy_receive("PT-TEST-002", "Verified and stocked at Apollo Care Pharmacy")
-
-    if blockchain.find_record("PT-STAGE1-DEMO") is None:
-        blockchain.register_medicine(
-            "PT-STAGE1-DEMO", "Azithromycin 250mg Tablets", "BATCH-S1-2026",
-            expiry_ts, "QmRPfUZb5v52nNjgV6wWE7biJnaHJbY9voczuVT25qujvr", 300
-        )
-
-    if blockchain.find_record("PT-STAGE2-DEMO") is None:
-        blockchain.register_medicine(
-            "PT-STAGE2-DEMO", "Metformin Hydrochloride 500mg", "BATCH-S2-2026",
-            expiry_ts, "QmRPfUZb5v52nNjgV6wWE7biJnaHJbY9voczuVT25qujvr", 450
-        )
-        blockchain.distributor_receive("PT-STAGE2-DEMO", "Checked and dispatched from Regional Warehouse")
 
     print("\n" + "=" * 60)
     print("ALL END-TO-END WORKFLOW INTEGRATION TESTS PASSED (14/14)!")

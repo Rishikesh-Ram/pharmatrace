@@ -105,7 +105,7 @@ class _MedicineLookupScreenState extends State<MedicineLookupScreen> {
                         onSubmitted: (_) => _lookup(),
                         decoration: const InputDecoration(
                           labelText: 'Medicine or Batch ID',
-                          hintText: 'e.g. PT-TEST-002 or 13606265',
+                          hintText: 'Enter medicine or batch ID',
                           prefixIcon: Icon(Icons.search_rounded),
                         ),
                       ),
@@ -261,8 +261,7 @@ class _MedicineLookupScreenState extends State<MedicineLookupScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            if (batch.journey.isNotEmpty)
-              VerticalJourneyTimeline(stages: batch.journey),
+            VerticalJourneyTimeline(stages: batch.journey),
             const Divider(height: 24),
             Theme(
               data: Theme.of(context)

@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -29,9 +28,7 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Scan Medicine QR'),
-      ),
+      appBar: AppBar(title: const Text('Scan Medicine QR')),
       body: Column(
         children: [
           const Padding(

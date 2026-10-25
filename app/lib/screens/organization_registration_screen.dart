@@ -150,7 +150,14 @@ class _OrganizationRegistrationScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.surface,
-      appBar: AppBar(title: const Text('Organization Registration')),
+      appBar: AppBar(
+        title: const Text('Organization Registration'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Return to Sign In',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -407,6 +414,26 @@ class _OrganizationRegistrationScreenState
                           ),
                         )
                       : const Text('Submit Registration'),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  key: const Key('return_to_signin_button'),
+                  onPressed: _submitting
+                      ? null
+                      : () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                  label: const Text(
+                    'Already registered? Return to Sign In',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primaryTeal,
+                      fontSize: 13.5,
+                    ),
+                  ),
                 ),
               ),
             ],

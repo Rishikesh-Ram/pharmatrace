@@ -7,10 +7,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 
-class MockRegistry {
-  static final List<Map<String, String>> batches = [];
-}
-
 class RegisterBatchScreen extends StatefulWidget {
   const RegisterBatchScreen({super.key});
   @override
@@ -97,13 +93,6 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
         imageBytes: _selectedImageBytes!,
         filename: _selectedImage!.name,
       );
-
-      MockRegistry.batches.add({
-        'drug': _drug.text.trim(),
-        'batchId': batchId,
-        'mfgDate': _mfg.text.trim(),
-        'expDate': _exp.text.trim(),
-      });
 
       if (!mounted) return;
 
@@ -236,7 +225,7 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
                     validator: _req,
                     decoration: const InputDecoration(
                       labelText: 'Batch ID',
-                      hintText: 'e.g. PT-DEMO-001',
+                      hintText: 'e.g. BATCH-2026-001',
                     ),
                   ),
                 ),

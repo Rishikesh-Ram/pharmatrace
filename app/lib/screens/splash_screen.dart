@@ -1,15 +1,16 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import '../widgets/pharma_artwork.dart';
-import 'welcome_screen.dart';
+import 'continue_choice_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   final Duration duration;
 
-  const SplashScreen({super.key, this.duration = const Duration(seconds: 5)});
+  const SplashScreen({super.key, this.duration = const Duration(seconds: 3)});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -34,38 +35,38 @@ class _SplashScreenState extends State<SplashScreen>
 
     _brandFade = CurvedAnimation(
       parent: _controller,
-      curve: const Interval(0.0, 0.28, curve: Curves.easeOutCubic),
+      curve: const Interval(0.0, 0.32, curve: Curves.easeOutCubic),
     );
-    _brandScale = Tween<double>(begin: 0.92, end: 1.0).animate(
+    _brandScale = Tween<double>(begin: 0.93, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: const Interval(0.0, 0.32, curve: Curves.easeOutBack),
+        curve: const Interval(0.0, 0.36, curve: Curves.easeOutBack),
       ),
     );
     _taglineFade = CurvedAnimation(
       parent: _controller,
-      curve: const Interval(0.18, 0.44, curve: Curves.easeOut),
+      curve: const Interval(0.18, 0.48, curve: Curves.easeOut),
     );
     _taglineSlide =
-        Tween<Offset>(begin: const Offset(0, 0.25), end: Offset.zero).animate(
+        Tween<Offset>(begin: const Offset(0, 0.22), end: Offset.zero).animate(
           CurvedAnimation(
             parent: _controller,
-            curve: const Interval(0.18, 0.44, curve: Curves.easeOutCubic),
+            curve: const Interval(0.18, 0.48, curve: Curves.easeOutCubic),
           ),
         );
 
     _controller.forward();
-    _navigationTimer = Timer(widget.duration, _transitionToWelcome);
+    _navigationTimer = Timer(widget.duration, _transitionToChoiceScreen);
   }
 
-  void _transitionToWelcome() {
+  void _transitionToChoiceScreen() {
     if (_hasNavigated || !mounted) return;
     _hasNavigated = true;
 
     Navigator.of(context).pushReplacement(
       PageRouteBuilder<void>(
-        transitionDuration: const Duration(milliseconds: 650),
-        pageBuilder: (_, _, _) => const WelcomeScreen(),
+        transitionDuration: const Duration(milliseconds: 500),
+        pageBuilder: (_, _, _) => const ContinueChoiceScreen(),
         transitionsBuilder: (_, animation, _, child) {
           return FadeTransition(
             opacity: CurvedAnimation(
@@ -91,16 +92,20 @@ class _SplashScreenState extends State<SplashScreen>
     final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
     return Scaffold(
-      backgroundColor: AppColors.deepNavy,
+      backgroundColor: AppColors.warmIvory,
       body: Container(
         width: double.infinity,
         height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF09121B), AppColors.navy, Color(0xFF0D2D35)],
-            stops: [0.0, 0.58, 1.0],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.warmIvory,
+              Color(0xFFF1F9F5),
+              AppColors.softMint,
+            ],
+            stops: [0.0, 0.62, 1.0],
           ),
         ),
         child: SafeArea(
@@ -139,7 +144,7 @@ class _SplashScreenState extends State<SplashScreen>
                               'PharmaTrace',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                color: Colors.white,
+                                color: AppColors.deepTeal,
                                 fontSize: 40,
                                 fontWeight: FontWeight.w800,
                                 letterSpacing: -0.9,
@@ -149,7 +154,7 @@ class _SplashScreenState extends State<SplashScreen>
                         ),
                       ),
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
                     Opacity(
                       opacity: taglineOpacity,
                       child: FractionalTranslation(
@@ -158,24 +163,27 @@ class _SplashScreenState extends State<SplashScreen>
                           'Trust Every Dose. Trace Every Batch.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: AppColors.mintSoft,
+                            color: AppColors.primaryTeal,
                             fontSize: 16.5,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0.2,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.15,
                           ),
                         ),
                       ),
                     ),
                     const Spacer(flex: 4),
-                    _FiveDotLoadingIndicator(progress: progress),
+                    ThreeDotLoadingIndicator(
+                      key: const Key('welcome_three_dots'),
+                      progress: progress,
+                    ),
                     const SizedBox(height: 14),
-                    Text(
+                    const Text(
                       'AUTHENTICITY & SUPPLY-CHAIN VERIFICATION',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.42),
+                        color: AppColors.mutedSage,
                         fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.6,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
                       ),
                     ),
                   ],
@@ -189,42 +197,59 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-class _FiveDotLoadingIndicator extends StatelessWidget {
+/// Three small non-clickable dots that animate sequentially one after another
+/// with a gentle scale and fade effect, looping across the 3-second welcome screen.
+class ThreeDotLoadingIndicator extends StatelessWidget {
   final double progress;
 
-  const _FiveDotLoadingIndicator({required this.progress});
+  const ThreeDotLoadingIndicator({super.key, required this.progress});
+
+  /// Compute the activation weight (0.0 to 1.0) for dot [index] (0, 1, or 2)
+  /// as the sequence loops 3 times over the 3-second duration.
+  static double dotActivation(double progress, int index) {
+    final cyclePhase = (progress * 3.0) % 1.0;
+    final targetPhase = (index + 0.5) / 3.0;
+    double distance = (cyclePhase - targetPhase).abs();
+    if (distance > 0.5) {
+      distance = 1.0 - distance;
+    }
+    return math.max(0.0, 1.0 - (distance * 3.0));
+  }
 
   @override
   Widget build(BuildContext context) {
-    // 5 dots that illuminate sequentially and pulse gently across the 5-second window
-    final activeIndex = (progress * 5).floor().clamp(0, 4);
+    return IgnorePointer(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (index) {
+          final weight = dotActivation(progress, index);
+          final scale = 1.0 + (0.38 * weight);
+          final opacity = 0.35 + (0.65 * weight);
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(5, (index) {
-        final isLit = index <= activeIndex;
-        final isCurrent = index == activeIndex;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 260),
-          margin: const EdgeInsets.symmetric(horizontal: 5),
-          width: isCurrent ? 20 : 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: isLit
-                ? AppColors.emerald
-                : Colors.white.withValues(alpha: 0.18),
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: isCurrent
-                ? [
-                    BoxShadow(
-                      color: AppColors.emerald.withValues(alpha: 0.55),
-                      blurRadius: 10,
-                    ),
-                  ]
-                : null,
-          ),
-        );
-      }),
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Transform.scale(
+              key: Key('welcome_dot_scale_$index'),
+              scale: scale,
+              child: Opacity(
+                key: Key('welcome_dot_opacity_$index'),
+                opacity: opacity,
+                child: Container(
+                  key: Key('welcome_dot_$index'),
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: weight > 0.35
+                        ? AppColors.primaryTeal
+                        : AppColors.mutedSage,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
     );
   }
 }

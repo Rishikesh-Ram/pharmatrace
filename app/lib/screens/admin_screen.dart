@@ -13,18 +13,13 @@ class _Org {
 }
 
 class _AdminScreenState extends State<AdminScreen> {
-  final _orgs = [
-    _Org('Sun Pharma', 'Manufacturer', 'Pending'),
-    _Org('MedLine Distributors', 'Distributor', 'Pending'),
-    _Org('City Wholesale', 'Wholesaler', 'Pending'),
-    _Org('Apollo Pharmacy', 'Pharmacy', 'Approved'),
-  ];
+  final _orgs = <_Org>[];
 
   Color _color(String s) => s == 'Approved'
       ? Colors.green
       : s == 'Rejected'
-          ? Colors.red
-          : Colors.orange;
+      ? Colors.red
+      : Colors.orange;
 
   @override
   Widget build(BuildContext context) {
@@ -36,26 +31,47 @@ class _AdminScreenState extends State<AdminScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (_orgs.isEmpty)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Text(
+                      'No organizations registered yet.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                ),
               for (final o in _orgs)
                 Card(
                   child: ListTile(
                     leading: const Icon(Icons.business),
                     title: Text(o.name),
-                    subtitle: Text('${o.role} • ${o.status}',
-                        style: TextStyle(color: _color(o.status))),
+                    subtitle: Text(
+                      '${o.role} • ${o.status}',
+                      style: TextStyle(color: _color(o.status)),
+                    ),
                     trailing: o.status == 'Pending'
-                        ? Row(mainAxisSize: MainAxisSize.min, children: [
-                            IconButton(
-                              icon: const Icon(Icons.check, color: Colors.green),
-                              onPressed: () =>
-                                  setState(() => o.status = 'Approved'),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.close, color: Colors.red),
-                              onPressed: () =>
-                                  setState(() => o.status = 'Rejected'),
-                            ),
-                          ])
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.check,
+                                  color: Colors.green,
+                                ),
+                                onPressed: () =>
+                                    setState(() => o.status = 'Approved'),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: Colors.red,
+                                ),
+                                onPressed: () =>
+                                    setState(() => o.status = 'Rejected'),
+                              ),
+                            ],
+                          )
                         : null,
                   ),
                 ),

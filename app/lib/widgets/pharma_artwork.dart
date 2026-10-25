@@ -42,44 +42,55 @@ class _SplashCapsulePainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width * 0.42;
 
-    // 1. Subtle ambient radial glow behind capsule
+    // 1. Soft mint & primary teal ambient glow behind the illustration
+    final pulseGlow = 0.92 + 0.08 * math.sin(progress * math.pi * 2);
     final glowPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          AppColors.emerald.withValues(alpha: 0.28),
-          AppColors.tealDark.withValues(alpha: 0.08),
-          Colors.transparent,
-        ],
-        stops: const [0.0, 0.55, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: radius * 1.25));
-    canvas.drawCircle(center, radius * 1.25, glowPaint);
+      ..shader =
+          RadialGradient(
+            colors: [
+              AppColors.softMint,
+              AppColors.primaryTeal.withValues(alpha: 0.14),
+              AppColors.warmIvory.withValues(alpha: 0.0),
+            ],
+            stops: const [0.0, 0.62, 1.0],
+          ).createShader(
+            Rect.fromCircle(center: center, radius: radius * 1.28 * pulseGlow),
+          );
+    canvas.drawCircle(center, radius * 1.28 * pulseGlow, glowPaint);
 
-    // 2. Outer digital traceability ring
+    // 2. Soft mint inner disc
+    canvas.drawCircle(
+      center,
+      radius * 0.76,
+      Paint()..color = AppColors.softMint.withValues(alpha: 0.75),
+    );
+
+    // 3. Outer & inner digital traceability rings in muted sage & primary teal
     final ringPaint = Paint()
-      ..color = AppColors.mintSoft.withValues(alpha: 0.16)
+      ..color = AppColors.mutedSage.withValues(alpha: 0.35)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    canvas.drawCircle(center, radius * 0.94, ringPaint);
+      ..strokeWidth = 1.3;
+    canvas.drawCircle(center, radius * 0.96, ringPaint);
 
     final innerRingPaint = Paint()
-      ..color = AppColors.emerald.withValues(alpha: 0.25)
+      ..color = AppColors.primaryTeal.withValues(alpha: 0.28)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    canvas.drawCircle(center, radius * 0.68, innerRingPaint);
+      ..strokeWidth = 1.2;
+    canvas.drawCircle(center, radius * 0.76, innerRingPaint);
 
-    // 3. Interconnected constellation tracking nodes around the capsule
-    final nodeAngles = <double>[-0.65, 0.35, 1.15, 2.35, 3.05];
+    // 4. Connected supply-chain traceability nodes around the capsule
+    final nodeAngles = <double>[-0.65, 0.35, 1.20, 2.30, 3.10];
     final nodeDistances = <double>[
-      radius * 0.94,
-      radius * 0.68,
-      radius * 0.94,
-      radius * 0.94,
-      radius * 0.68,
+      radius * 0.96,
+      radius * 0.76,
+      radius * 0.96,
+      radius * 0.96,
+      radius * 0.76,
     ];
 
     final nodePoints = <Offset>[];
     for (int i = 0; i < nodeAngles.length; i++) {
-      final a = nodeAngles[i] + (progress * 0.35);
+      final a = nodeAngles[i] + (progress * 0.40);
       final d = nodeDistances[i];
       nodePoints.add(
         Offset(center.dx + math.cos(a) * d, center.dy + math.sin(a) * d),
@@ -87,8 +98,8 @@ class _SplashCapsulePainter extends CustomPainter {
     }
 
     final connectorPaint = Paint()
-      ..color = AppColors.emerald.withValues(alpha: 0.22)
-      ..strokeWidth = 1.1
+      ..color = AppColors.primaryTeal.withValues(alpha: 0.22)
+      ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke;
 
     for (int i = 0; i < nodePoints.length; i++) {
@@ -101,23 +112,24 @@ class _SplashCapsulePainter extends CustomPainter {
       final pulse = 0.55 + 0.45 * math.sin((progress * math.pi * 2) + i * 1.3);
       canvas.drawCircle(
         pt,
-        6.5 * pulse,
-        Paint()..color = AppColors.emerald.withValues(alpha: 0.25 * pulse),
+        7.5 * pulse,
+        Paint()..color = AppColors.primaryTeal.withValues(alpha: 0.22 * pulse),
       );
+      canvas.drawCircle(pt, 4.2, Paint()..color = AppColors.white);
       canvas.drawCircle(
         pt,
-        3.2,
-        Paint()..color = i.isEven ? AppColors.mintSoft : AppColors.emerald,
+        3.0,
+        Paint()..color = i.isEven ? AppColors.primaryTeal : AppColors.deepTeal,
       );
     }
 
-    // 4. Tilted two-tone pharmaceutical capsule in the center
+    // 5. Tilted two-tone pharmaceutical capsule in the center
     canvas.save();
     canvas.translate(center.dx, center.dy);
     canvas.rotate(-math.pi / 5.5);
 
     final capWidth = size.width * 0.25;
-    final capHeight = size.height * 0.54;
+    final capHeight = size.height * 0.52;
     final capRect = Rect.fromCenter(
       center: Offset.zero,
       width: capWidth,
@@ -128,11 +140,11 @@ class _SplashCapsulePainter extends CustomPainter {
       Radius.circular(capWidth / 2),
     );
 
-    // Soft drop shadow
+    // Gentle teal-tinted elevation shadow
     canvas.drawRRect(
       capRRect.shift(const Offset(0, 8)),
       Paint()
-        ..color = Colors.black.withValues(alpha: 0.32)
+        ..color = AppColors.deepTeal.withValues(alpha: 0.16)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12),
     );
 
@@ -140,7 +152,7 @@ class _SplashCapsulePainter extends CustomPainter {
     canvas.save();
     canvas.clipRRect(capRRect);
 
-    // Top half: Emerald teal
+    // Top half: Primary Teal to Deep Teal gradient
     final topRect = Rect.fromLTRB(-capWidth, -capHeight, capWidth, 0);
     canvas.drawRect(
       topRect,
@@ -148,11 +160,11 @@ class _SplashCapsulePainter extends CustomPainter {
         ..shader = const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF2DD4BF), Color(0xFF0D9488)],
+          colors: [AppColors.primaryTeal, AppColors.deepTeal],
         ).createShader(topRect),
     );
 
-    // Bottom half: Warm pearl white with mint tint
+    // Bottom half: Warm Ivory & Soft Mint
     final bottomRect = Rect.fromLTRB(-capWidth, 0, capWidth, capHeight);
     canvas.drawRect(
       bottomRect,
@@ -160,14 +172,14 @@ class _SplashCapsulePainter extends CustomPainter {
         ..shader = const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFFFFFFF), Color(0xFFDDF7EE)],
+          colors: [AppColors.white, AppColors.softMint],
         ).createShader(bottomRect),
     );
 
-    // Center band / seam
+    // Center band / seam in muted sage
     canvas.drawRect(
       Rect.fromCenter(center: Offset.zero, width: capWidth, height: 3.5),
-      Paint()..color = AppColors.deepNavy.withValues(alpha: 0.18),
+      Paint()..color = AppColors.mutedSage.withValues(alpha: 0.45),
     );
 
     // Glossy highlight along left edge
@@ -182,29 +194,33 @@ class _SplashCapsulePainter extends CustomPainter {
     );
     canvas.drawRRect(
       glossRect,
-      Paint()..color = Colors.white.withValues(alpha: 0.35),
+      Paint()..color = AppColors.white.withValues(alpha: 0.38),
     );
 
     canvas.restore();
 
-    // Subtle rim border on capsule
+    // Subtle sage-teal border on capsule
     canvas.drawRRect(
       capRRect,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.28)
+        ..color = AppColors.deepTeal.withValues(alpha: 0.18)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
+        ..strokeWidth = 1.3,
     );
 
     canvas.restore();
 
-    // 5. Small authenticity shield badge at bottom-right of capsule
+    // 6. Verification shield badge at bottom-right of capsule
     final badgeCenter = Offset(
       center.dx + radius * 0.38,
       center.dy + radius * 0.34,
     );
-    canvas.drawCircle(badgeCenter, 15, Paint()..color = AppColors.deepNavy);
-    canvas.drawCircle(badgeCenter, 13, Paint()..color = AppColors.emerald);
+    canvas.drawCircle(badgeCenter, 17, Paint()..color = AppColors.white);
+    canvas.drawCircle(
+      badgeCenter,
+      14.5,
+      Paint()..color = AppColors.primaryTeal,
+    );
     final checkPath = Path()
       ..moveTo(badgeCenter.dx - 5, badgeCenter.dy + 0.5)
       ..lineTo(badgeCenter.dx - 1.2, badgeCenter.dy + 4.2)
@@ -212,7 +228,7 @@ class _SplashCapsulePainter extends CustomPainter {
     canvas.drawPath(
       checkPath,
       Paint()
-        ..color = AppColors.deepNavy
+        ..color = AppColors.white
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.4
         ..strokeCap = StrokeCap.round
@@ -440,7 +456,7 @@ class _OrganizationTracePainter extends CustomPainter {
         Rect.fromLTWH(0, 0, size.width, size.height),
         const Radius.circular(20),
       ),
-      Paint()..color = const Color(0xFFE8EEF2),
+      Paint()..color = AppColors.softMint,
     );
 
     // Package cube + connected nodes
@@ -448,10 +464,10 @@ class _OrganizationTracePainter extends CustomPainter {
       Rect.fromCenter(center: c, width: 28, height: 28),
       const Radius.circular(8),
     );
-    canvas.drawRRect(boxRect, Paint()..color = AppColors.navy);
+    canvas.drawRRect(boxRect, Paint()..color = AppColors.deepTeal);
 
     final linePaint = Paint()
-      ..color = AppColors.emerald
+      ..color = AppColors.softMint
       ..strokeWidth = 2.0
       ..strokeCap = StrokeCap.round;
     canvas.drawLine(Offset(c.dx - 7, c.dy), Offset(c.dx + 7, c.dy), linePaint);
@@ -462,7 +478,7 @@ class _OrganizationTracePainter extends CustomPainter {
       Offset(c.dx + 18, c.dy - 15),
       Offset(c.dx + 18, c.dy + 15),
     ]) {
-      canvas.drawCircle(pt, 3.5, Paint()..color = AppColors.tealDark);
+      canvas.drawCircle(pt, 3.5, Paint()..color = AppColors.primaryTeal);
     }
   }
 
@@ -483,6 +499,25 @@ class VerticalJourneyTimeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (stages.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.warmIvory,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.hairline),
+        ),
+        child: const Text(
+          'Your medicine journey will appear here after the first transaction.',
+          style: TextStyle(
+            fontSize: 13.5,
+            color: AppColors.secondaryText,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      );
+    }
     return Column(
       children: [
         for (int i = 0; i < stages.length; i++)

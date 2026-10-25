@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from flask import Flask, jsonify, request, send_file  # noqa: E402
+from flask import Flask, g, jsonify, request, send_file  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from PIL import Image  # noqa: E402
 
@@ -158,9 +158,26 @@ def _resolve_authorized_signer(required_roles: tuple[str, ...], explicit_role: s
     auth_header = request.headers.get("Authorization", "")
     session = auth.verify_token(auth_header)
 
+    if auth_header.strip() and not session:
+        return None, None, None, (
+            jsonify(
+                error="Invalid or expired session token.",
+                code="UNAUTHORIZED",
+            ),
+            401,
+        )
+
     if session:
         user_role = session["role"].lower()
         user_addr = session["address"]
+        if explicit_role and explicit_role.strip().lower() != user_role:
+            return None, None, None, (
+                jsonify(
+                    error=f"Access denied: Authenticated role '{user_role}' cannot perform operations as '{explicit_role.strip().lower()}'.",
+                    code="UNAUTHORIZED_ROLE",
+                ),
+                403,
+            )
         if user_role not in required_roles:
             return None, None, None, (
                 jsonify(
@@ -185,8 +202,18 @@ def _resolve_authorized_signer(required_roles: tuple[str, ...], explicit_role: s
             key_tmp = blockchain.get_key_for_role(user_role)
             user_addr = blockchain.w3.eth.account.from_key(key_tmp).address
 
-    # Verify on-chain active status for non-admin roles
-    if user_role != "admin":
+    # Verify on-chain authorization for admin and supply-chain roles
+    if user_role == "admin":
+        expected_admin = auth._resolve_admin_address()
+        if user_addr.lower() != expected_admin.lower():
+            return None, None, None, (
+                jsonify(
+                    error="Access denied: Wallet does not match the smart-contract Administrator address.",
+                    code="UNAUTHORIZED_ADMIN_ADDRESS",
+                ),
+                403,
+            )
+    else:
         try:
             chain_u = blockchain.get_user(user_addr)
             expected_role_num = blockchain.ROLE_MAP.get(user_role, 0)
@@ -213,6 +240,7 @@ def _resolve_authorized_signer(required_roles: tuple[str, ...], explicit_role: s
                 503,
             )
 
+    g.actor = session or {"role": user_role, "username": user_role, "address": user_addr}
     key = auth.get_signing_key_for_address(user_addr, fallback_role=user_role)
     return key, user_role, user_addr, None
 
@@ -225,20 +253,64 @@ def _resolve_authorized_signer(required_roles: tuple[str, ...], explicit_role: s
 def api_login():
     """Authenticate a supply-chain organization or admin account."""
     data = request.get_json(silent=True) or request.form.to_dict()
-    identifier = (data.get("identifier") or data.get("username") or data.get("email") or "").strip()
+    identifier = (data.get("identifier") or "").strip()
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip()
     password = data.get("password") or ""
     expected_role = (data.get("role") or data.get("expected_role") or "").strip()
 
-    if not identifier or not password:
-        return jsonify(
-            error="Username/email and password are required.",
-            code="MISSING_CREDENTIALS",
-        ), 400
+    if expected_role.lower() == "admin":
+        if (not identifier and not email and not username) or not password:
+            return jsonify(
+                error="Username or email and password are required for administrator sign-in.",
+                code="MISSING_CREDENTIALS",
+            ), 400
+    else:
+        if not identifier and not username and not email:
+            return jsonify(
+                error="Username/email and password are required.",
+                code="MISSING_CREDENTIALS",
+            ), 400
+        if not password:
+            return jsonify(
+                error="Password is required.",
+                code="MISSING_CREDENTIALS",
+            ), 400
 
-    res, err, status = auth.authenticate_user(identifier, password, expected_role=expected_role or None)
+    res, err, status = auth.authenticate_user(
+        identifier=identifier or None,
+        password=password,
+        expected_role=expected_role or None,
+        username=username or None,
+        email=email or None,
+    )
     if err is not None:
         return jsonify(err), status
     return jsonify(res), 200
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+def api_change_password():
+    """Change an account password securely."""
+    data = request.get_json(silent=True) or request.form.to_dict()
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+
+    auth_header = request.headers.get("Authorization", "")
+    session = auth.verify_token(auth_header)
+    ident = session.get("username") if session else (data.get("username") or data.get("identifier") or data.get("email") or "")
+    if not ident:
+        return jsonify(error="User identification is required.", code="MISSING_CREDENTIALS"), 400
+
+    ok, err = auth.change_password(
+        identifier_or_username=ident,
+        current_password=current_password,
+        new_password=new_password,
+    )
+    if not ok:
+        return jsonify(error=err or "Password change failed.", code="PASSWORD_CHANGE_FAILED"), 400
+
+    return jsonify(success=True, message="Password updated successfully."), 200
 
 
 @app.route("/api/auth/me", methods=["GET"])
@@ -266,6 +338,45 @@ def api_logout():
     auth_header = request.headers.get("Authorization", "")
     auth.revoke_token(auth_header)
     return jsonify(success=True, message="Signed out successfully.")
+
+
+@app.route("/api/auth/admin-status", methods=["GET"])
+def api_admin_status():
+    """Check whether the initial administrator account has been provisioned."""
+    return jsonify(admin_provisioned=auth.has_admin_account())
+
+
+@app.route("/api/auth/bootstrap-admin", methods=["POST"])
+def api_bootstrap_admin():
+    """One-time endpoint to provision the initial administrator when none exists."""
+    if auth.has_admin_account():
+        return jsonify(
+            error="An administrator account has already been provisioned. Public admin creation is disabled.",
+            code="ADMIN_ALREADY_PROVISIONED",
+        ), 403
+
+    data = request.get_json(silent=True) or request.form.to_dict()
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    org_name = (data.get("org_name") or "PharmaTrace Regulatory Authority").strip()
+
+    try:
+        record = auth.provision_initial_admin(
+            username=username,
+            email=email,
+            password=password,
+            org_name=org_name,
+        )
+        return jsonify(
+            success=True,
+            admin=record,
+            message="Initial Administrator account provisioned successfully.",
+        ), 201
+    except PermissionError as exc:
+        return jsonify(error=str(exc), code="ADMIN_ALREADY_PROVISIONED"), 403
+    except ValueError as exc:
+        return jsonify(error=str(exc), code="VALIDATION_ERROR"), 400
 
 
 # =====================================================================
@@ -583,13 +694,28 @@ def get_users():
     try:
         users = blockchain.get_all_users()
         enriched = []
+        organizations = []
         for u in users:
             meta = auth.get_org_metadata(u.get("address", ""))
-            enriched.append({
+            is_admin_entry = bool(
+                u.get("is_admin")
+                or u.get("role") == 1
+                or (u.get("role_name") or "").lower() == "admin"
+            )
+            item = {
                 **meta,
                 **u,
-            })
-        return jsonify(users=enriched)
+                "is_admin": is_admin_entry,
+                "is_organization": not is_admin_entry,
+            }
+            enriched.append(item)
+            if not is_admin_entry:
+                organizations.append(item)
+        return jsonify(
+            users=enriched,
+            organizations=organizations,
+            organization_count=len(organizations),
+        )
     except Exception as exc:
         return jsonify(error=str(exc)), 500
 
@@ -708,10 +834,13 @@ def approve_user():
         tx_hash = blockchain.approve_user(target, signer_role=resolved_role, private_key=signer_key)
         tx_meta = blockchain.get_tx_meta(tx_hash)
         updated = blockchain.get_user(target)
+        actor_user = getattr(g, "actor", {}).get("username", resolved_role)
+        app.logger.info("Organization %s approved by %s (%s). Tx: %s", target, actor_user, resolved_role, tx_hash)
         return jsonify(
             success=True,
             target=target,
             approver_role=resolved_role,
+            actor_username=actor_user,
             status=updated.get("status_name", "Pending"),
             adminOk=updated.get("adminOk", False),
             mfrOk=updated.get("mfrOk", False),
@@ -747,9 +876,13 @@ def reject_user():
         tx_hash = blockchain.reject_user(target, signer_role=resolved_role, private_key=signer_key)
         tx_meta = blockchain.get_tx_meta(tx_hash)
         updated = blockchain.get_user(target)
+        actor_user = getattr(g, "actor", {}).get("username", resolved_role)
+        app.logger.info("Organization %s rejected by %s (%s). Tx: %s", target, actor_user, resolved_role, tx_hash)
         return jsonify(
             success=True,
             target=target,
+            rejecter_role=resolved_role,
+            actor_username=actor_user,
             status=updated.get("status_name", "Rejected"),
             transaction_hash=tx_hash,
             block_number=tx_meta.get("block_number"),
@@ -891,10 +1024,13 @@ def recall_medicine():
         actual_id = record["raw"]["id"]
         tx_hash = blockchain.recall_medicine(actual_id, reason, signer_role=resolved_role, private_key=signer_key)
         tx_meta = blockchain.get_tx_meta(tx_hash)
+        actor_user = getattr(g, "actor", {}).get("username", resolved_role)
+        app.logger.info("Medicine %s recalled on-chain by %s (%s). Tx: %s", actual_id, actor_user, resolved_role, tx_hash)
         return jsonify(
             success=True,
             medicine_id=actual_id,
             reason=reason,
+            actor_username=actor_user,
             transaction_hash=tx_hash,
             block_number=tx_meta.get("block_number"),
             confirmation_status=tx_meta.get("confirmation_status", "Confirmed"),
@@ -924,39 +1060,32 @@ def get_batches():
 
 
 # =====================================================================
-# SYSTEM ROLES & DEMO UTILITIES
+# SYSTEM ROLES & CONFIGURATION
 # =====================================================================
 
 @app.route("/api/roles", methods=["GET"])
 def get_system_roles():
-    """Get system accounts and configured role addresses for demo & dashboard routing."""
+    """Get configured role addresses and system metadata."""
     return jsonify({
         "admin": {
             "address": blockchain.w3.eth.account.from_key(blockchain.DEFAULT_ADMIN_KEY).address,
             "role": "Admin",
-            "username": "admin",
-            "email": "admin@pharmatrace.local",
             "requires_approval": False,
+            "admin_provisioned": auth.has_admin_account(),
         },
         "manufacturer": {
             "address": blockchain.w3.eth.account.from_key(blockchain.DEFAULT_MFR_KEY).address,
             "role": "Manufacturer",
-            "username": "manufacturer",
-            "email": "manufacturer@elnova.local",
             "requires_approval": True,
         },
         "distributor": {
             "address": blockchain.w3.eth.account.from_key(blockchain.DEFAULT_DIST_KEY).address,
             "role": "Distributor",
-            "username": "distributor",
-            "email": "distributor@medline.local",
             "requires_approval": True,
         },
         "pharmacy": {
             "address": blockchain.w3.eth.account.from_key(blockchain.DEFAULT_PHARM_KEY).address,
             "role": "Pharmacy",
-            "username": "pharmacy",
-            "email": "pharmacy@apollocare.local",
             "requires_approval": True,
         },
         "consumer": {

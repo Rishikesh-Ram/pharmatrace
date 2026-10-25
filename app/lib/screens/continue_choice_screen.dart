@@ -27,8 +27,7 @@ class ContinueChoiceScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.surface,
-      appBar: AppBar(title: const Text('PharmaTrace')),
+      backgroundColor: AppColors.warmIvory,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -38,21 +37,55 @@ class ContinueChoiceScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.softMint,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.verified_user_rounded,
+                          size: 18,
+                          color: AppColors.primaryTeal,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'PharmaTrace',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.deepTeal,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 22),
                   const Text(
                     'How would you like to continue?',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 30,
                       fontWeight: FontWeight.w800,
-                      color: AppColors.ink,
+                      color: AppColors.deepTeal,
                       letterSpacing: -0.6,
                     ),
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    'Select your access path below.',
+                    'Choose Consumer verification or Organization supply-chain access.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 15, color: AppColors.muted),
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: AppColors.secondaryText,
+                    ),
                   ),
                   const SizedBox(height: 36),
                   LayoutBuilder(
@@ -60,19 +93,19 @@ class ContinueChoiceScreen extends StatelessWidget {
                       final wide = constraints.maxWidth >= 620;
                       final consumerCard = _AccessPathCard(
                         artwork: const ConsumerShieldArtwork(),
+                        badgeText: 'No login required',
                         title: 'Consumer',
-                        description:
-                            'Check whether your medicine can be verified.',
+                        description: 'Check medicine authenticity by scanning a QR code or entering a batch ID.',
                         actionLabel: 'Verify a Medicine',
                         primary: true,
                         onTap: () => _openConsumer(context),
                       );
                       final orgCard = _AccessPathCard(
                         artwork: const OrganizationTraceArtwork(),
+                        badgeText: 'Supply-chain portal',
                         title: 'Organization',
-                        description:
-                            'Manage medicines and supply-chain records.',
-                        actionLabel: 'Organization Login',
+                        description: 'Access manufacturer, distributor, pharmacy, or administrator supply-chain tools.',
+                        actionLabel: 'Organization Access',
                         primary: false,
                         onTap: () => _openOrganization(context),
                       );
@@ -111,6 +144,7 @@ class ContinueChoiceScreen extends StatelessWidget {
 
 class _AccessPathCard extends StatelessWidget {
   final Widget artwork;
+  final String badgeText;
   final String title;
   final String description;
   final String actionLabel;
@@ -119,6 +153,7 @@ class _AccessPathCard extends StatelessWidget {
 
   const _AccessPathCard({
     required this.artwork,
+    required this.badgeText,
     required this.title,
     required this.description,
     required this.actionLabel,
@@ -129,12 +164,12 @@ class _AccessPathCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: AppColors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
         side: BorderSide(
           color: primary
-              ? AppColors.emerald.withValues(alpha: 0.45)
+              ? AppColors.primaryTeal.withValues(alpha: 0.45)
               : AppColors.hairline,
           width: primary ? 1.5 : 1.0,
         ),
@@ -151,14 +186,38 @@ class _AccessPathCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  artwork,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      artwork,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.softMint,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          badgeText,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.deepTeal,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 24),
                   Text(
                     title,
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w800,
-                      color: AppColors.ink,
+                      color: AppColors.deepTeal,
                       letterSpacing: -0.4,
                     ),
                   ),
@@ -167,7 +226,7 @@ class _AccessPathCard extends StatelessWidget {
                     description,
                     style: const TextStyle(
                       fontSize: 14.5,
-                      color: AppColors.muted,
+                      color: AppColors.secondaryText,
                       height: 1.45,
                     ),
                   ),
@@ -177,23 +236,16 @@ class _AccessPathCard extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 height: 48,
-                child: primary
-                    ? FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.tealDark,
-                          foregroundColor: Colors.white,
-                        ),
-                        onPressed: onTap,
-                        child: Text(actionLabel),
-                      )
-                    : FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.navy,
-                          foregroundColor: Colors.white,
-                        ),
-                        onPressed: onTap,
-                        child: Text(actionLabel),
-                      ),
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: primary
+                        ? AppColors.primaryTeal
+                        : AppColors.deepTeal,
+                    foregroundColor: AppColors.white,
+                  ),
+                  onPressed: onTap,
+                  child: Text(actionLabel),
+                ),
               ),
             ],
           ),

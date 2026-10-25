@@ -184,7 +184,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
                         controller: _controller,
                         decoration: InputDecoration(
                           labelText: 'Medicine or Batch ID',
-                          hintText: 'e.g. PT-TEST-002 or 13606265',
+                          hintText: 'Enter medicine or batch ID',
                           prefixIcon: const Icon(Icons.qr_code_2_rounded),
                           suffixIcon: IconButton(
                             tooltip: 'Scan QR Code',

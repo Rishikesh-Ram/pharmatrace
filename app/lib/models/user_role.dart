@@ -1,11 +1,4 @@
-
-enum UserRole {
-  consumer,
-  manufacturer,
-  distributor,
-  pharmacy,
-  admin,
-}
+enum UserRole { consumer, manufacturer, distributor, pharmacy, admin }
 
 extension UserRoleDetails on UserRole {
   String get title {
@@ -34,7 +27,14 @@ extension UserRoleDetails on UserRole {
       case UserRole.pharmacy:
         return 'Review medicines and their verification details.';
       case UserRole.admin:
-        return 'View system functions and organization management.';
+        return 'Manage organization approvals and authorized platform operations.';
     }
   }
+
+  bool get isSupplyChainOrganization =>
+      this == UserRole.manufacturer ||
+      this == UserRole.distributor ||
+      this == UserRole.pharmacy;
+
+  bool get isPlatformAdmin => this == UserRole.admin;
 }

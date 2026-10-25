@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../services/api_service.dart';
 
 class TransferScreen extends StatefulWidget {
@@ -9,23 +10,18 @@ class TransferScreen extends StatefulWidget {
 
 class _TransferScreenState extends State<TransferScreen> {
   final _batch = TextEditingController();
-  final _orgs = [
-    'Sun Pharma (Manufacturer)',
-    'MedLine Distributors',
-    'City Wholesale',
-    'Apollo Pharmacy',
-  ];
-  String _from = 'Sun Pharma (Manufacturer)';
-  String _to = 'MedLine Distributors';
+  final List<String> _orgs = [];
+  String? _from;
+  String? _to;
   String? _message;
   bool _ok = false;
   bool _loading = false;
 
   Future<void> _transfer() async {
-    if (_from == _to) {
+    if (_from == null || _to == null || _from == _to) {
       setState(() {
         _ok = false;
-        _message = 'Sender and receiver must be different.';
+        _message = 'Select different sender and receiver organizations.';
       });
       return;
     }
@@ -47,16 +43,23 @@ class _TransferScreenState extends State<TransferScreen> {
     });
   }
 
-  Widget _dropdown(String label, String value, ValueChanged<String?> onChanged) {
+  Widget _dropdown(
+    String label,
+    String? value,
+    ValueChanged<String?> onChanged,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: InputDecorator(
         decoration: InputDecoration(
-            labelText: label, border: const OutlineInputBorder()),
+          labelText: label,
+          border: const OutlineInputBorder(),
+        ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<String>(
             value: value,
             isExpanded: true,
+            hint: const Text('Select organization'),
             items: _orgs
                 .map((o) => DropdownMenuItem(value: o, child: Text(o)))
                 .toList(),
@@ -80,16 +83,30 @@ class _TransferScreenState extends State<TransferScreen> {
               TextField(
                 controller: _batch,
                 decoration: const InputDecoration(
-                    labelText: 'Batch ID (try BATCH101)',
-                    border: OutlineInputBorder()),
+                  labelText: 'Batch ID',
+                  hintText: 'Enter registered batch ID',
+                  border: OutlineInputBorder(),
+                ),
               ),
               const SizedBox(height: 12),
-              _dropdown('From', _from, (v) => setState(() => _from = v!)),
-              _dropdown('To', _to, (v) => setState(() => _to = v!)),
+              if (_orgs.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No registered organizations available for transfer.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+              else ...[
+                _dropdown('From', _from, (v) => setState(() => _from = v)),
+                _dropdown('To', _to, (v) => setState(() => _to = v)),
+              ],
               FilledButton(
-                onPressed: _loading ? null : _transfer,
+                onPressed: _loading || _orgs.isEmpty ? null : _transfer,
                 child: const Padding(
-                    padding: EdgeInsets.all(12), child: Text('Transfer')),
+                  padding: EdgeInsets.all(12),
+                  child: Text('Transfer'),
+                ),
               ),
               const SizedBox(height: 20),
               if (_loading) const Center(child: CircularProgressIndicator()),
@@ -98,11 +115,13 @@ class _TransferScreenState extends State<TransferScreen> {
                   color: _ok ? Colors.green.shade50 : Colors.red.shade50,
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Row(children: [
-                      Icon(_ok ? Icons.check_circle : Icons.error),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(_message!)),
-                    ]),
+                    child: Row(
+                      children: [
+                        Icon(_ok ? Icons.check_circle : Icons.error),
+                        const SizedBox(width: 12),
+                        Expanded(child: Text(_message!)),
+                      ],
+                    ),
                   ),
                 ),
             ],

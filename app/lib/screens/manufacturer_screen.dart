@@ -15,13 +15,15 @@ class _ManufacturerScreenState extends State<ManufacturerScreen> {
   String? _registeredId;
 
   Widget _field(TextEditingController c, String label) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: TextField(
-          controller: c,
-          decoration: InputDecoration(
-              labelText: label, border: const OutlineInputBorder()),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: 12),
+    child: TextField(
+      controller: c,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -43,18 +45,19 @@ class _ManufacturerScreenState extends State<ManufacturerScreen> {
                   setState(() => _registeredId = _batch.text.trim());
                 },
                 child: const Padding(
-                    padding: EdgeInsets.all(12), child: Text('Register batch')),
+                  padding: EdgeInsets.all(12),
+                  child: Text('Register batch'),
+                ),
               ),
               if (_registeredId != null) ...[
                 const SizedBox(height: 24),
-                const Text('Batch registered. QR code:',
-                    textAlign: TextAlign.center,
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                Center(
-                  child: QrImageView(data: _registeredId!, size: 220),
+                const Text(
+                  'Batch registered. QR code:',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
+                const SizedBox(height: 12),
+                Center(child: QrImageView(data: _registeredId!, size: 220)),
                 Center(child: Text(_registeredId!)),
               ],
             ],

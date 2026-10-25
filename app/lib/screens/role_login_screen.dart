@@ -23,6 +23,7 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
   late UserRole _selectedRole;
   bool _obscurePassword = true;
   bool _loading = false;
+  bool _adminProvisioned = true;
 
   String? _errorTitle;
   String? _errorMessage;
@@ -32,7 +33,6 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
     UserRole.manufacturer,
     UserRole.distributor,
     UserRole.pharmacy,
-    UserRole.admin,
   ];
 
   @override
@@ -42,6 +42,7 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
     _selectedRole = (init == null || init == UserRole.consumer)
         ? UserRole.manufacturer
         : init;
+    _checkAdminStatus();
   }
 
   @override
@@ -51,6 +52,15 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
         widget.initialRole != oldWidget.initialRole &&
         widget.initialRole != UserRole.consumer) {
       _selectedRole = widget.initialRole!;
+      _checkAdminStatus();
+    }
+  }
+
+  Future<void> _checkAdminStatus() async {
+    if (_selectedRole != UserRole.admin) return;
+    final provisioned = await api.getAdminStatus();
+    if (mounted) {
+      setState(() => _adminProvisioned = provisioned);
     }
   }
 
@@ -59,48 +69,6 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
     _identifierCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
-  }
-
-  Map<String, String> _demoCredentialsForRole(UserRole role) {
-    switch (role) {
-      case UserRole.admin:
-        return {
-          'email': 'admin@pharmatrace.local',
-          'password': 'Admin@123',
-          'org': 'PharmaTrace Regulatory Authority',
-        };
-      case UserRole.manufacturer:
-        return {
-          'email': 'manufacturer@elnova.local',
-          'password': 'Mfr@123',
-          'org': 'Elnova Pharmaceuticals',
-        };
-      case UserRole.distributor:
-        return {
-          'email': 'distributor@medline.local',
-          'password': 'Dist@123',
-          'org': 'MedLine National Logistics',
-        };
-      case UserRole.pharmacy:
-        return {
-          'email': 'pharmacy@apollocare.local',
-          'password': 'Pharm@123',
-          'org': 'Apollo Care Pharmacy',
-        };
-      case UserRole.consumer:
-        return {'email': '', 'password': '', 'org': ''};
-    }
-  }
-
-  void _autofillDemoCredentials() {
-    final creds = _demoCredentialsForRole(_selectedRole);
-    setState(() {
-      _identifierCtrl.text = creds['email'] ?? '';
-      _passwordCtrl.text = creds['password'] ?? '';
-      _errorMessage = null;
-      _errorTitle = null;
-      _errorCode = null;
-    });
   }
 
   Future<void> _submitLogin() async {
@@ -138,8 +106,13 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
         title = 'Registration Rejected';
       } else if (e.code == 'ROLE_MISMATCH') {
         title = 'Role Mismatch';
+      } else if (e.code == 'CREDENTIAL_MISMATCH') {
+        title = 'Credential Mismatch';
       } else if (e.code == 'INVALID_CREDENTIALS') {
         title = 'Invalid Credentials';
+      } else if (e.code == 'ADMIN_NOT_PROVISIONED') {
+        title = 'Administrator Not Provisioned';
+        _adminProvisioned = false;
       }
       setState(() {
         _loading = false;
@@ -158,12 +131,136 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
     }
   }
 
+  Future<void> _openInitialAdminBootstrapDialog() async {
+    final userCtrl = TextEditingController(text: 'admin');
+    final emailCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    final orgCtrl = TextEditingController(
+      text: 'PharmaTrace Regulatory Authority',
+    );
+    final dialogFormKey = GlobalKey<FormState>();
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Initial Administrator Setup',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            color: AppColors.deepTeal,
+          ),
+        ),
+        content: Form(
+          key: dialogFormKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Provision the one-time system Administrator bound to the smart contract deployer wallet.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.secondaryText,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: orgCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Authority / Organization Name',
+                  ),
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty) ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: userCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Admin Username',
+                  ),
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty) ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: emailCtrl,
+                  decoration: const InputDecoration(labelText: 'Admin Email'),
+                  validator: (v) => (v == null || !v.contains('@'))
+                      ? 'Enter a valid email'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: passCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Password (min 6 characters)',
+                  ),
+                  validator: (v) => (v == null || v.length < 6)
+                      ? 'Minimum 6 characters'
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              if (!dialogFormKey.currentState!.validate()) return;
+              try {
+                await api.bootstrapInitialAdmin(
+                  username: userCtrl.text.trim(),
+                  email: emailCtrl.text.trim(),
+                  password: passCtrl.text,
+                  orgName: orgCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              } catch (e) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(ctx)
+                      .showSnackBar(SnackBar(content: Text(e.toString())));
+                }
+              }
+            },
+            child: const Text('Provision Admin'),
+          ),
+        ],
+      ),
+    );
+
+    if (created == true && mounted) {
+      setState(() {
+        _adminProvisioned = true;
+        _identifierCtrl.text = emailCtrl.text.trim();
+        _errorMessage = null;
+        _errorTitle = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Initial Administrator provisioned. You may now sign in.',
+          ),
+        ),
+      );
+    }
+  }
+
   void _openOrganizationRegistration() {
-    if (_selectedRole == UserRole.admin) return;
+    final targetRole =
+        (_selectedRole == UserRole.admin || _selectedRole == UserRole.consumer)
+        ? UserRole.manufacturer
+        : _selectedRole;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) =>
-            OrganizationRegistrationScreen(preselectedRole: _selectedRole),
+            OrganizationRegistrationScreen(preselectedRole: targetRole),
       ),
     );
   }
@@ -171,10 +268,9 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
   @override
   Widget build(BuildContext context) {
     final isAdmin = _selectedRole == UserRole.admin;
-    final demoCreds = _demoCredentialsForRole(_selectedRole);
 
     return Scaffold(
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppColors.warmIvory,
       appBar: AppBar(title: Text('${_selectedRole.title} Sign In')),
       body: SafeArea(
         child: Center(
@@ -186,7 +282,7 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Material(
-                    color: Colors.white,
+                    color: AppColors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(24),
                       side: const BorderSide(color: AppColors.hairline),
@@ -198,66 +294,107 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            if (isAdmin) ...[
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.softMint,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.shield_outlined,
+                                        size: 14,
+                                        color: AppColors.deepTeal,
+                                      ),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Restricted Access Portal',
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.deepTeal,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                             Text(
-                              'Sign in as ${_selectedRole.title}',
+                              isAdmin ? 'Admin Sign In' : 'Sign in as ${_selectedRole.title}',
                               style: const TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.w800,
-                                color: AppColors.ink,
+                                color: AppColors.deepTeal,
                                 letterSpacing: -0.5,
                               ),
                             ),
                             const SizedBox(height: 6),
-                            const Text(
-                              'Enter your organization credentials to continue.',
-                              style: TextStyle(
+                            Text(
+                              isAdmin
+                                  ? 'Authorized platform administrators only.'
+                                  : 'Enter your organization credentials to continue.',
+                              style: const TextStyle(
                                 fontSize: 13.5,
-                                color: AppColors.muted,
+                                color: AppColors.secondaryText,
                               ),
                             ),
-                            const SizedBox(height: 18),
-                            // Compact role switcher pills
-                            SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: _orgRoles.map((r) {
-                                  final selected = r == _selectedRole;
-                                  return Padding(
-                                    padding: const EdgeInsets.only(right: 8),
-                                    child: ChoiceChip(
-                                      label: Text(r.title),
-                                      selected: selected,
-                                      selectedColor: AppColors.mintSoft,
-                                      labelStyle: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: selected
-                                            ? FontWeight.w700
-                                            : FontWeight.w500,
-                                        color: AppColors.ink,
+                            if (!isAdmin) ...[
+                              const SizedBox(height: 18),
+                              // Compact role switcher pills
+                              SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: _orgRoles.map((r) {
+                                    final selected = r == _selectedRole;
+                                    return Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: ChoiceChip(
+                                        label: Text(r.title),
+                                        selected: selected,
+                                        selectedColor: AppColors.softMint,
+                                        labelStyle: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                          color: AppColors.deepTeal,
+                                        ),
+                                        onSelected: _loading
+                                            ? null
+                                            : (_) {
+                                                setState(() {
+                                                  _selectedRole = r;
+                                                  _errorMessage = null;
+                                                  _errorTitle = null;
+                                                });
+                                                _checkAdminStatus();
+                                              },
                                       ),
-                                      onSelected: _loading
-                                          ? null
-                                          : (_) {
-                                              setState(() {
-                                                _selectedRole = r;
-                                                _errorMessage = null;
-                                                _errorTitle = null;
-                                              });
-                                            },
-                                    ),
-                                  );
-                                }).toList(),
+                                    );
+                                  }).toList(),
+                                ),
                               ),
-                            ),
+                            ],
                             const SizedBox(height: 20),
                             if (_errorMessage != null) _buildErrorBanner(),
                             TextFormField(
+                              key: const Key('identifier_field'),
                               controller: _identifierCtrl,
                               enabled: !_loading,
-                              keyboardType: TextInputType.emailAddress,
+                              keyboardType: TextInputType.text,
                               textInputAction: TextInputAction.next,
                               decoration: const InputDecoration(
-                                labelText: 'Username or Email',
+                                labelText: 'Username or email',
                                 prefixIcon: Icon(
                                   Icons.person_outline,
                                   size: 20,
@@ -265,13 +402,16 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                               ),
                               validator: (v) {
                                 if (v == null || v.trim().isEmpty) {
-                                  return 'Enter your username or email.';
+                                  return isAdmin
+                                      ? 'Enter your administrator username or email.'
+                                      : 'Enter your username or email.';
                                 }
                                 return null;
                               },
                             ),
                             const SizedBox(height: 14),
                             TextFormField(
+                              key: const Key('password_field'),
                               controller: _passwordCtrl,
                               enabled: !_loading,
                               obscureText: _obscurePassword,
@@ -322,12 +462,13 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                                     : const Text('Sign In'),
                               ),
                             ),
-                            const SizedBox(height: 18),
-                            const Divider(),
-                            const SizedBox(height: 8),
-                            if (!isAdmin)
+                            if (!isAdmin) ...[
+                              const SizedBox(height: 18),
+                              const Divider(),
+                              const SizedBox(height: 8),
                               Center(
                                 child: TextButton(
+                                  key: const Key('register_org_button'),
                                   onPressed: _loading
                                       ? null
                                       : _openOrganizationRegistration,
@@ -336,69 +477,37 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
                                       fontWeight: FontWeight.w700,
-                                      color: AppColors.tealDark,
+                                      color: AppColors.primaryTeal,
+                                      fontSize: 13.5,
                                     ),
                                   ),
                                 ),
-                              )
-                            else
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 6),
-                                child: Text(
-                                  'Public registration is disabled for Admin.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: AppColors.muted,
+                              ),
+                            ] else if (!_adminProvisioned) ...[
+                              const SizedBox(height: 18),
+                              const Divider(),
+                              const SizedBox(height: 8),
+                              Center(
+                                child: TextButton.icon(
+                                  onPressed: _loading
+                                      ? null
+                                      : _openInitialAdminBootstrapDialog,
+                                  icon: const Icon(
+                                    Icons.admin_panel_settings_outlined,
+                                    size: 16,
+                                  ),
+                                  label: const Text(
+                                    'Complete Initial Administrator Setup',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
                               ),
+                            ],
                           ],
                         ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // Compact Dev Autofill bar
-                  Material(
-                    color: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      side: const BorderSide(color: AppColors.hairline),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.bolt_rounded,
-                            color: AppColors.tealDark,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Demo: ${demoCreds['org']}',
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: _loading
-                                ? null
-                                : _autofillDemoCredentials,
-                            child: const Text(
-                              'Autofill',
-                              style: TextStyle(fontSize: 12.5),
-                            ),
-                          ),
-                        ],
                       ),
                     ),
                   ),
@@ -422,18 +531,20 @@ class _RoleLoginScreenState extends State<RoleLoginScreen> {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: fg.withValues(alpha: 0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            _errorTitle ?? 'Sign-In Error',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 13.5,
-              color: fg,
+          if (_errorTitle != null)
+            Text(
+              _errorTitle!,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: fg,
+                fontSize: 13,
+              ),
             ),
-          ),
           const SizedBox(height: 4),
           Text(
             _errorMessage!,

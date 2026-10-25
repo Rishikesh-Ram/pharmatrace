@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../services/api_service.dart';
 
 class ConsumerResultScreen extends StatelessWidget {
@@ -20,13 +21,11 @@ class ConsumerResultScreen extends StatelessWidget {
     final badgeColor = isVerified
         ? Colors.green
         : isSuspicious
-            ? Colors.orange
-            : Colors.red;
+        ? Colors.orange
+        : Colors.red;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Verification Result'),
-      ),
+      appBar: AppBar(title: const Text('Verification Result')),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 540),
@@ -47,8 +46,8 @@ class ConsumerResultScreen extends StatelessWidget {
                         isVerified
                             ? Icons.verified
                             : isSuspicious
-                                ? Icons.warning_amber
-                                : Icons.cancel_outlined,
+                            ? Icons.warning_amber
+                            : Icons.cancel_outlined,
                         size: 54,
                         color: badgeColor,
                       ),
@@ -66,10 +65,13 @@ class ConsumerResultScreen extends StatelessWidget {
                         isVerified
                             ? 'Both blockchain record and packaging match verified.'
                             : isSuspicious
-                                ? 'Warning: Discrepancies found between packaging and blockchain records.'
-                                : 'Alert: Unverified or potentially counterfeit medicine.',
+                            ? 'Warning: Discrepancies found between packaging and blockchain records.'
+                            : 'Alert: Unverified or potentially counterfeit medicine.',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 13, color: Colors.black87),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Colors.black87,
+                        ),
                       ),
                     ],
                   ),
@@ -84,7 +86,10 @@ class ConsumerResultScreen extends StatelessWidget {
                     children: [
                       Text(
                         batch.medicine,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const Divider(height: 20),
                       _row('Batch ID', batch.id),
@@ -127,7 +132,10 @@ class ConsumerResultScreen extends StatelessWidget {
             child: Text(label, style: const TextStyle(color: Colors.black54)),
           ),
           Expanded(
-            child: Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+            child: Text(
+              value,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),

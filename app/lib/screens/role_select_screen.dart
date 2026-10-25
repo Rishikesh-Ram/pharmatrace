@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/user_role.dart';
 import '../theme/app_theme.dart';
+import 'organization_registration_screen.dart';
 import 'role_login_screen.dart';
 
 class RoleSelectScreen extends StatefulWidget {
@@ -14,11 +15,10 @@ class RoleSelectScreen extends StatefulWidget {
 class _RoleSelectScreenState extends State<RoleSelectScreen> {
   UserRole _selectedRole = UserRole.manufacturer;
 
-  static const List<UserRole> _orgRoles = [
+  static const List<UserRole> _supplyChainRoles = [
     UserRole.manufacturer,
     UserRole.distributor,
     UserRole.pharmacy,
-    UserRole.admin,
   ];
 
   IconData _roleIcon(UserRole role) {
@@ -45,7 +45,7 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
       case UserRole.pharmacy:
         return 'Verify incoming stock before dispensing.';
       case UserRole.admin:
-        return 'Review and authorize network organizations.';
+        return 'Authorized platform administrators only.';
       case UserRole.consumer:
         return '';
     }
@@ -54,6 +54,18 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
   void _openLogin(UserRole role) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => RoleLoginScreen(initialRole: role)),
+    );
+  }
+
+  void _openRegistration() {
+    final targetRole = _selectedRole.isSupplyChainOrganization
+        ? _selectedRole
+        : UserRole.manufacturer;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            OrganizationRegistrationScreen(preselectedRole: targetRole),
+      ),
     );
   }
 
@@ -82,25 +94,30 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Choose your supply-chain role to sign in.',
+                    'Choose your supply-chain organization role to sign in or register.',
                     style: TextStyle(fontSize: 15, color: AppColors.muted),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
                   LayoutBuilder(
                     builder: (context, constraints) {
-                      final twoCols = constraints.maxWidth >= 520;
+                      final threeCols = constraints.maxWidth >= 600;
+                      final twoCols = constraints.maxWidth >= 420;
                       return GridView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: _orgRoles.length,
+                        itemCount: _supplyChainRoles.length,
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: twoCols ? 2 : 1,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          mainAxisExtent: 156,
+                          crossAxisCount: threeCols
+                              ? 3
+                              : twoCols
+                              ? 2
+                              : 1,
+                          crossAxisSpacing: 14,
+                          mainAxisSpacing: 14,
+                          mainAxisExtent: 176,
                         ),
                         itemBuilder: (context, index) {
-                          final role = _orgRoles[index];
+                          final role = _supplyChainRoles[index];
                           final selected = _selectedRole == role;
                           return Material(
                             color: Colors.white,
@@ -120,7 +137,7 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
                                 _openLogin(role);
                               },
                               child: Padding(
-                                padding: const EdgeInsets.all(20),
+                                padding: const EdgeInsets.all(18),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisAlignment:
@@ -165,7 +182,7 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
                                         Text(
                                           role.title,
                                           style: const TextStyle(
-                                            fontSize: 17,
+                                            fontSize: 16.5,
                                             fontWeight: FontWeight.w700,
                                             color: AppColors.ink,
                                           ),
@@ -176,7 +193,7 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
                                           maxLines: 2,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            fontSize: 12.5,
+                                            fontSize: 12,
                                             color: AppColors.muted,
                                             height: 1.35,
                                           ),
@@ -191,6 +208,105 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
                         },
                       );
                     },
+                  ),
+                  const SizedBox(height: 14),
+                  Center(
+                    child: TextButton.icon(
+                      onPressed: _openRegistration,
+                      icon: const Icon(Icons.add_business_outlined, size: 18),
+                      label: const Text(
+                        'New to PharmaTrace? Register your organization.',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primaryTeal,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Divider(),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Platform Governance',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.muted,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Material(
+                    color: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      side: BorderSide(
+                        color: _selectedRole == UserRole.admin
+                            ? AppColors.emerald
+                            : AppColors.hairline,
+                        width: _selectedRole == UserRole.admin ? 1.8 : 1.0,
+                      ),
+                    ),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () {
+                        setState(() => _selectedRole = UserRole.admin);
+                        _openLogin(UserRole.admin);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: AppColors.softMint,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(
+                                Icons.shield_outlined,
+                                color: AppColors.deepTeal,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Administrator',
+                                    style: TextStyle(
+                                      fontSize: 15.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _roleSummary(UserRole.admin),
+                                    style: const TextStyle(
+                                      fontSize: 12.5,
+                                      color: AppColors.muted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 18,
+                              color: AppColors.muted,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),

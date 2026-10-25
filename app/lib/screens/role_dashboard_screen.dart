@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import '../models/user_role.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import 'continue_choice_screen.dart';
 import 'home_screen.dart';
 import 'medicine_lookup_screen.dart';
 import 'organization_registration_screen.dart';
 import 'register_batch_screen.dart';
-import 'welcome_screen.dart';
 
 class RoleDashboardScreen extends StatefulWidget {
   final UserRole role;
@@ -234,7 +234,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
     await api.logout();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+      MaterialPageRoute(builder: (_) => const ContinueChoiceScreen()),
       (route) => false,
     );
   }
@@ -249,7 +249,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
           backgroundColor: canvas,
           drawer: compact
               ? Drawer(
-                  backgroundColor: AppColors.navy,
+                  backgroundColor: AppColors.white,
                   child: SafeArea(child: _buildSidebar()),
                 )
               : null,
@@ -281,109 +281,118 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
   }
 
   Widget _buildSidebar() {
-    return Material(
-      color: AppColors.navy,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 26, 18, 26),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: AppColors.emerald.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.verified_user_rounded,
-                    color: AppColors.emerald,
-                    size: 22,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'PharmaTrace',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 19,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.4,
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.white,
+        border: Border(right: BorderSide(color: line)),
+      ),
+      child: Material(
+        color: AppColors.white,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 26, 18, 26),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.softMint,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.verified_user_rounded,
+                      color: AppColors.primaryTeal,
+                      size: 22,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [for (final item in navItems) _buildNavTile(item)],
-            ),
-          ),
-          Container(
-            margin: const EdgeInsets.all(14),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.navySurface,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                const CircleAvatar(
-                  radius: 17,
-                  backgroundColor: Color(0xFF21374D),
-                  child: Icon(
-                    Icons.person_outline,
-                    color: AppColors.mintSoft,
-                    size: 18,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        (api.currentUser?['org_name'] ?? widget.role.title)
-                            .toString(),
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12.5,
-                        ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'PharmaTrace',
+                      style: TextStyle(
+                        color: AppColors.deepTeal,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.4,
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.role == UserRole.consumer
-                            ? 'Public Access'
-                            : widget.role.title,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppColors.mintSoft,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-                IconButton(
-                  tooltip: 'Exit / Switch Role',
-                  onPressed: switchRole,
-                  icon: const Icon(
-                    Icons.logout_rounded,
-                    color: Colors.white70,
-                    size: 18,
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [for (final item in navItems) _buildNavTile(item)],
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.warmIvory,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.hairline),
+              ),
+              child: Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 17,
+                    backgroundColor: AppColors.softMint,
+                    child: Icon(
+                      Icons.person_outline,
+                      color: AppColors.deepTeal,
+                      size: 18,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          (api.currentUser?['org_name'] ?? widget.role.title)
+                              .toString(),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.deepTeal,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.role == UserRole.consumer
+                              ? 'Public Access'
+                              : widget.role == UserRole.admin
+                              ? 'Platform Administrator'
+                              : widget.role.title,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.secondaryText,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Exit / Switch Role',
+                    onPressed: switchRole,
+                    icon: const Icon(
+                      Icons.logout_rounded,
+                      color: AppColors.secondaryText,
+                      size: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -397,16 +406,16 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
         dense: true,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         selected: active,
-        selectedTileColor: AppColors.emerald.withValues(alpha: 0.16),
+        selectedTileColor: AppColors.softMint,
         leading: Icon(
           item.icon,
-          color: active ? AppColors.emerald : Colors.white60,
+          color: active ? AppColors.primaryTeal : AppColors.secondaryText,
           size: 20,
         ),
         title: Text(
           item.label,
           style: TextStyle(
-            color: active ? Colors.white : Colors.white70,
+            color: active ? AppColors.deepTeal : AppColors.secondaryText,
             fontWeight: active ? FontWeight.w700 : FontWeight.w500,
             fontSize: 13,
           ),
@@ -458,6 +467,8 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                 Text(
                   widget.role == UserRole.consumer
                       ? 'Public Access'
+                      : widget.role == UserRole.admin
+                      ? 'Restricted Admin Portal'
                       : 'On-Chain Session',
                   style: const TextStyle(
                     color: ink,
@@ -489,7 +500,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
           padding: const EdgeInsets.all(28),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [AppColors.navy, Color(0xFF114B48)],
+              colors: [AppColors.deepTeal, AppColors.primaryTeal],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -511,7 +522,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
               Text(
                 widget.role.description,
                 style: const TextStyle(
-                  color: AppColors.mintSoft,
+                  color: AppColors.softMint,
                   fontSize: 14,
                   height: 1.4,
                 ),
@@ -523,8 +534,8 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                 children: [
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.emerald,
-                      foregroundColor: AppColors.deepNavy,
+                      backgroundColor: AppColors.white,
+                      foregroundColor: AppColors.deepTeal,
                     ),
                     onPressed: () {
                       final destination = widget.role == UserRole.manufacturer
@@ -616,9 +627,26 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
 
   List<_StatData> _overviewCards() {
     final batchCount = (_liveBatches?.length ?? 0).toString();
-    final userCount = (_liveUsers?.length ?? 0).toString();
+    final orgCount =
+        (_liveUsers
+                    ?.where(
+                      (u) =>
+                          (u['role_name'] ?? '') != 'Admin' &&
+                          u['is_admin'] != true,
+                    )
+                    .length ??
+                0)
+            .toString();
     final pendingCount =
-        (_liveUsers?.where((u) => u['status_name'] == 'Pending').length ?? 0)
+        (_liveUsers
+                    ?.where(
+                      (u) =>
+                          u['status_name'] == 'Pending' &&
+                          (u['role_name'] ?? '') != 'Admin' &&
+                          u['is_admin'] != true,
+                    )
+                    .length ??
+                0)
             .toString();
     final stage1Count = (_liveBatches?.where((b) => b.stage == 1).length ?? 0)
         .toString();
@@ -630,7 +658,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
     switch (widget.role) {
       case UserRole.admin:
         return [
-          _StatData('Organizations', userCount, Icons.business_outlined),
+          _StatData('Organizations', orgCount, Icons.business_outlined),
           _StatData('Pending Approvals', pendingCount, Icons.schedule_rounded),
           _StatData('Total Batches', batchCount, Icons.medication_outlined),
           const _StatData('Chain Status', 'Online', Icons.hub_outlined),
@@ -769,7 +797,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
                 child: Text(
-                  'No medicine batches loaded yet.',
+                  'No medicines registered yet.',
                   style: TextStyle(color: AppColors.muted, fontSize: 13),
                 ),
               )
@@ -853,7 +881,9 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
         : 'Partner Approvals (${widget.role.title})';
 
     final allOrgs = (_liveUsers ?? [])
-        .where((u) => (u['role_name'] ?? '') != 'Admin')
+        .where(
+          (u) => (u['role_name'] ?? '') != 'Admin' && u['is_admin'] != true,
+        )
         .toList();
 
     final filteredOrgs = allOrgs.where((u) {
@@ -933,7 +963,11 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
             Padding(
               padding: const EdgeInsets.all(16),
               child: Text(
-                'No organizations matching "$_approvalFilter".',
+                allOrgs.isEmpty
+                    ? 'No organizations registered yet.'
+                    : (_approvalFilter == 'Pending'
+                          ? 'No organizations awaiting approval.'
+                          : 'No organizations matching "$_approvalFilter".'),
                 style: const TextStyle(color: AppColors.muted),
               ),
             )
@@ -1172,7 +1206,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
             controller: _receiptMedIdController,
             decoration: const InputDecoration(
               labelText: 'Medicine or Batch ID',
-              hintText: 'e.g. PT-STAGE1-DEMO',
+              hintText: 'Enter registered medicine or batch ID',
               prefixIcon: Icon(Icons.qr_code_rounded),
             ),
           ),
@@ -1274,7 +1308,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                 child: TextField(
                   controller: _quickLookupController,
                   decoration: const InputDecoration(
-                    hintText: 'Search batch ID (e.g. PT-TEST-002)',
+                    hintText: 'Search by medicine or batch ID',
                     prefixIcon: Icon(Icons.search_rounded),
                   ),
                   onSubmitted: (v) {
@@ -1323,7 +1357,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
             const Padding(
               padding: EdgeInsets.all(16),
               child: Text(
-                'No batches in this queue.',
+                'No medicines registered yet.',
                 style: TextStyle(color: AppColors.muted),
               ),
             )

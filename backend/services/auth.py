@@ -3,10 +3,11 @@
 Note on architecture:
 - Passwords are never stored in plaintext; all credentials use salted PBKDF2-SHA256 hashes via Werkzeug.
 - Session tokens are HMAC-SHA256 signed server tokens validated on protected endpoints.
-- In local Hardhat development mode, the four primary supply-chain roles map to deterministic
-  Hardhat accounts (#0 Admin, #1 Manufacturer, #2 Distributor, #3 Pharmacy), while newly registered
-  organizations receive freshly provisioned Hardhat-funded accounts whose keys remain strictly
-  server-side.
+- Normal application startup begins with a clean credential store (no pre-seeded demo organizations).
+- The initial Administrator account can be provisioned once via environment variables
+  (PHARMATRACE_ADMIN_USERNAME, PHARMATRACE_ADMIN_EMAIL, PHARMATRACE_ADMIN_PASSWORD),
+  the CLI script `backend/scripts/provision_admin.py`, or the one-time bootstrap endpoint
+  `POST /api/auth/bootstrap-admin` (which is permanently disabled once an Admin exists).
 """
 import hashlib
 import hmac
@@ -20,35 +21,221 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from services import blockchain
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-AUTH_STORE_PATH = DATA_DIR / "auth_store.json"
-SERVER_KEYS_PATH = DATA_DIR / "server_keys.json"
+DEFAULT_AUTH_STORE_PATH = DATA_DIR / "auth_store.json"
+DEFAULT_SERVER_KEYS_PATH = DATA_DIR / "server_keys.json"
 
 _SECRET_KEY = os.getenv("PHARMATRACE_AUTH_SECRET", "pharmatrace-local-dev-hmac-secret-2026")
 _ACTIVE_SESSIONS: dict[str, dict] = {}
 
 
+def _get_auth_store_path() -> Path:
+    custom = os.getenv("PHARMATRACE_AUTH_STORE_PATH", "").strip()
+    if custom:
+        return Path(custom)
+    return DEFAULT_AUTH_STORE_PATH
+
+
+def _get_server_keys_path() -> Path:
+    custom = os.getenv("PHARMATRACE_KEY_STORE_PATH", "").strip()
+    if custom:
+        return Path(custom)
+    return DEFAULT_SERVER_KEYS_PATH
+
+
 def _ensure_data_dir() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    store_path = _get_auth_store_path()
+    store_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _default_accounts() -> dict[str, dict]:
-    """Seeded development accounts corresponding to the 4 Hardhat role wallets."""
+def _resolve_admin_address() -> str:
+    """Resolve the on-chain administrator address (smart contract admin() or deployer wallet)."""
+    try:
+        if blockchain.is_connected():
+            contract = blockchain._get_contract()
+            chain_admin = contract.functions.admin().call()
+            if chain_admin and chain_admin != blockchain.ZERO_ADDRESS:
+                return chain_admin
+    except Exception:
+        pass
+    return blockchain.w3.eth.account.from_key(blockchain.DEFAULT_ADMIN_KEY).address
+
+
+def _maybe_provision_env_admin(store: dict[str, dict]) -> bool:
+    """If no admin exists in `store` and PHARMATRACE_ADMIN_PASSWORD is set in env, provision it."""
+    if any(acct.get("role", "").lower() == "admin" for acct in store.values()):
+        return False
+
+    env_pw = os.getenv("PHARMATRACE_ADMIN_PASSWORD", "").strip()
+    if not env_pw:
+        return False
+
+    admin_addr = _resolve_admin_address()
+    env_user = os.getenv("PHARMATRACE_ADMIN_USERNAME", "admin").strip().lower() or "admin"
+    env_email = os.getenv("PHARMATRACE_ADMIN_EMAIL", f"{env_user}@pharmatrace.org").strip().lower()
+    env_org = os.getenv("PHARMATRACE_ADMIN_ORG", "PharmaTrace Regulatory Authority").strip()
+
+    store[admin_addr.lower()] = {
+        "address": admin_addr,
+        "username": env_user,
+        "email": env_email,
+        "password_hash": generate_password_hash(env_pw, method="pbkdf2:sha256"),
+        "role": "admin",
+        "org_name": env_org,
+        "license_number": "REG-AUTH-ROOT",
+        "contact_phone": "",
+        "location": "",
+        "created_at": int(time.time()),
+        "is_demo_seed": False,
+    }
+    return True
+
+
+def load_store() -> dict[str, dict]:
+    _ensure_data_dir()
+    store_path = _get_auth_store_path()
+    if not store_path.is_file():
+        empty_store: dict[str, dict] = {}
+        if _maybe_provision_env_admin(empty_store):
+            save_store(empty_store)
+        return empty_store
+    try:
+        raw = store_path.read_text(encoding="utf-8").strip()
+        data = json.loads(raw) if raw else {}
+        if not isinstance(data, dict):
+            data = {}
+        if _maybe_provision_env_admin(data):
+            save_store(data)
+        return data
+    except Exception:
+        return {}
+
+
+def save_store(store: dict[str, dict]) -> None:
+    _ensure_data_dir()
+    store_path = _get_auth_store_path()
+    store_path.write_text(json.dumps(store, indent=2), encoding="utf-8")
+
+
+def has_admin_account() -> bool:
+    """Return True if an administrator account has been provisioned in the auth store."""
+    store = load_store()
+    return any(acct.get("role", "").lower() == "admin" for acct in store.values())
+
+
+def provision_admin_account(
+    *,
+    username: str,
+    email: str,
+    password: str,
+    name: str = "",
+    org_name: str = "PharmaTrace Regulatory Authority",
+) -> tuple[dict, bool]:
+    """Provision an administrator account idempotently.
+    Returns (account_record, created_boolean).
+    If an administrator account with the same username or email already exists,
+    returns (existing_record, False) without altering the password.
+    """
+    user_clean = (username or "").strip()
+    email_clean = (email or "").strip().lower()
+    pw_clean = (password or "").strip()
+    name_clean = (name or user_clean).strip()
+
+    if not user_clean or not email_clean:
+        raise ValueError("Username and email are required to provision an administrator.")
+
+    store = load_store()
+
+    # Check if an admin with the same username or email already exists
+    for key, acct in store.items():
+        if acct.get("role", "").lower() == "admin":
+            if acct.get("username", "").lower() == user_clean.lower() or acct.get("email", "").lower() == email_clean:
+                return {k: v for k, v in acct.items() if k != "password_hash"}, False
+
+    if not pw_clean or len(pw_clean) < 6:
+        raise ValueError("Administrator password must be at least 6 characters.")
+
+    admin_addr = _resolve_admin_address()
+    account_key = f"admin:{user_clean.lower()}"
+
+    record = {
+        "address": admin_addr,
+        "name": name_clean,
+        "username": user_clean,
+        "email": email_clean,
+        "password_hash": generate_password_hash(pw_clean, method="pbkdf2:sha256"),
+        "role": "admin",
+        "org_name": (org_name or "PharmaTrace Regulatory Authority").strip(),
+        "license_number": "REG-AUTH-ROOT",
+        "contact_phone": "",
+        "location": "",
+        "must_change_password": True,
+        "created_at": int(time.time()),
+        "is_demo_seed": False,
+    }
+    store[account_key] = record
+    save_store(store)
+    return {k: v for k, v in record.items() if k != "password_hash"}, True
+
+
+def provision_initial_admin(
+    *,
+    username: str,
+    email: str,
+    password: str,
+    org_name: str = "PharmaTrace Regulatory Authority",
+) -> dict:
+    """One-time secure provisioning of the initial Administrator account.
+    Raises PermissionError if an administrator account already exists.
+    """
+    if has_admin_account():
+        raise PermissionError(
+            "An administrator account has already been provisioned. Public or duplicate admin creation is disabled."
+        )
+
+    user_clean = (username or "").strip().lower()
+    email_clean = (email or "").strip().lower()
+    pw_clean = (password or "").strip()
+
+    if not user_clean or not email_clean or not pw_clean:
+        raise ValueError("Username, email, and password are required to provision the initial administrator.")
+    if len(pw_clean) < 6:
+        raise ValueError("Administrator password must be at least 6 characters.")
+
+    admin_addr = _resolve_admin_address()
+    store = load_store()
+    record = {
+        "address": admin_addr,
+        "username": user_clean,
+        "email": email_clean,
+        "password_hash": generate_password_hash(pw_clean, method="pbkdf2:sha256"),
+        "role": "admin",
+        "org_name": (org_name or "PharmaTrace Regulatory Authority").strip(),
+        "license_number": "REG-AUTH-ROOT",
+        "contact_phone": "",
+        "location": "",
+        "created_at": int(time.time()),
+        "is_demo_seed": False,
+    }
+    store[admin_addr.lower()] = record
+    save_store(store)
+    return {k: v for k, v in record.items() if k != "password_hash"}
+
+
+def seed_test_accounts() -> dict[str, dict]:
+    """Explicit test-fixture helper for automated test suites ONLY.
+    Never called during normal application startup.
+    """
     admin_addr = blockchain.w3.eth.account.from_key(blockchain.DEFAULT_ADMIN_KEY).address
     mfr_addr = blockchain.w3.eth.account.from_key(blockchain.DEFAULT_MFR_KEY).address
     dist_addr = blockchain.w3.eth.account.from_key(blockchain.DEFAULT_DIST_KEY).address
     pharm_addr = blockchain.w3.eth.account.from_key(blockchain.DEFAULT_PHARM_KEY).address
 
-    admin_pw = os.getenv("ADMIN_DEMO_PASSWORD", "Admin@123")
-    mfr_pw = os.getenv("MFR_DEMO_PASSWORD", "Mfr@123")
-    dist_pw = os.getenv("DIST_DEMO_PASSWORD", "Dist@123")
-    pharm_pw = os.getenv("PHARM_DEMO_PASSWORD", "Pharm@123")
-
-    return {
+    fixtures = {
         admin_addr.lower(): {
             "address": admin_addr,
             "username": "admin",
             "email": "admin@pharmatrace.local",
-            "password_hash": generate_password_hash(admin_pw, method="pbkdf2:sha256"),
+            "password_hash": generate_password_hash("Admin@123", method="pbkdf2:sha256"),
             "role": "admin",
             "org_name": "PharmaTrace Regulatory Authority",
             "license_number": "REG-AUTH-ROOT",
@@ -61,7 +248,7 @@ def _default_accounts() -> dict[str, dict]:
             "address": mfr_addr,
             "username": "manufacturer",
             "email": "manufacturer@elnova.local",
-            "password_hash": generate_password_hash(mfr_pw, method="pbkdf2:sha256"),
+            "password_hash": generate_password_hash("Mfr@123", method="pbkdf2:sha256"),
             "role": "manufacturer",
             "org_name": "Elnova Pharmaceuticals",
             "license_number": "MFG-LIC-2026-001",
@@ -74,7 +261,7 @@ def _default_accounts() -> dict[str, dict]:
             "address": dist_addr,
             "username": "distributor",
             "email": "distributor@medline.local",
-            "password_hash": generate_password_hash(dist_pw, method="pbkdf2:sha256"),
+            "password_hash": generate_password_hash("Dist@123", method="pbkdf2:sha256"),
             "role": "distributor",
             "org_name": "MedLine National Logistics",
             "license_number": "DIST-LIC-2026-014",
@@ -88,7 +275,7 @@ def _default_accounts() -> dict[str, dict]:
             "address": pharm_addr,
             "username": "pharmacy",
             "email": "pharmacy@apollocare.local",
-            "password_hash": generate_password_hash(pharm_pw, method="pbkdf2:sha256"),
+            "password_hash": generate_password_hash("Pharm@123", method="pbkdf2:sha256"),
             "role": "pharmacy",
             "org_name": "Apollo Care Pharmacy",
             "license_number": "PHARM-LIC-2026-089",
@@ -100,45 +287,24 @@ def _default_accounts() -> dict[str, dict]:
             "is_demo_seed": True,
         },
     }
-
-
-def load_store() -> dict[str, dict]:
-    _ensure_data_dir()
-    defaults = _default_accounts()
-    if not AUTH_STORE_PATH.is_file():
-        save_store(defaults)
-        return defaults
-    try:
-        data = json.loads(AUTH_STORE_PATH.read_text(encoding="utf-8"))
-        changed = False
-        for k, v in defaults.items():
-            if k not in data:
-                data[k] = v
-                changed = True
-        if changed:
-            save_store(data)
-        return data
-    except Exception:
-        save_store(defaults)
-        return defaults
-
-
-def save_store(store: dict[str, dict]) -> None:
-    _ensure_data_dir()
-    AUTH_STORE_PATH.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    store = load_store()
+    store.update(fixtures)
+    save_store(store)
+    return store
 
 
 def save_server_key(address: str, private_key: str) -> None:
     """Persist a generated organization private key strictly on the backend."""
     _ensure_data_dir()
+    keys_path = _get_server_keys_path()
     keys = {}
-    if SERVER_KEYS_PATH.is_file():
+    if keys_path.is_file():
         try:
-            keys = json.loads(SERVER_KEYS_PATH.read_text(encoding="utf-8"))
+            keys = json.loads(keys_path.read_text(encoding="utf-8"))
         except Exception:
             keys = {}
     keys[address.lower()] = private_key
-    SERVER_KEYS_PATH.write_text(json.dumps(keys, indent=2), encoding="utf-8")
+    keys_path.write_text(json.dumps(keys, indent=2), encoding="utf-8")
 
 
 def get_signing_key_for_address(address: str | None, fallback_role: str = "") -> str:
@@ -153,9 +319,10 @@ def get_signing_key_for_address(address: str | None, fallback_role: str = "") ->
         ):
             if blockchain.w3.eth.account.from_key(key).address.lower() == addr_low:
                 return key
-        if SERVER_KEYS_PATH.is_file():
+        keys_path = _get_server_keys_path()
+        if keys_path.is_file():
             try:
-                keys = json.loads(SERVER_KEYS_PATH.read_text(encoding="utf-8"))
+                keys = json.loads(keys_path.read_text(encoding="utf-8"))
                 if addr_low in keys:
                     return keys[addr_low]
             except Exception:
@@ -166,8 +333,15 @@ def get_signing_key_for_address(address: str | None, fallback_role: str = "") ->
 def get_org_metadata(address: str) -> dict:
     """Return non-sensitive metadata (email, license, phone, location) for an address."""
     store = load_store()
-    entry = store.get((address or "").lower(), {})
+    entry = store.get((address or "").lower())
+    if not entry:
+        for acct in store.values():
+            if acct.get("address", "").lower() == (address or "").lower():
+                entry = acct
+                break
+    entry = entry or {}
     return {
+        "name": entry.get("name", ""),
         "username": entry.get("username", ""),
         "email": entry.get("email", ""),
         "license_number": entry.get("license_number", ""),
@@ -275,16 +449,26 @@ def verify_token(token: str | None) -> dict | None:
         return None
 
     store = load_store()
-    acct = store.get(addr_low)
+    acct = None
+    user_low = username.lower()
+    for candidate in store.values():
+        if candidate.get("username", "").lower() == user_low:
+            acct = candidate
+            break
+    if not acct:
+        acct = store.get(addr_low)
     if not acct:
         return None
+
     return {
         "address": acct["address"],
         "role": acct["role"],
+        "name": acct.get("name", acct["username"]),
         "username": acct["username"],
         "email": acct["email"],
         "org_name": acct["org_name"],
         "license_number": acct.get("license_number", ""),
+        "must_change_password": acct.get("must_change_password", False),
     }
 
 
@@ -302,29 +486,117 @@ def find_account_by_identifier(identifier: str) -> dict | None:
     if not ident:
         return None
     store = load_store()
-    # Direct address match
     if ident in store:
         return store[ident]
+    if f"admin:{ident}" in store:
+        return store[f"admin:{ident}"]
     for acct in store.values():
         if acct.get("email", "").lower() == ident or acct.get("username", "").lower() == ident:
             return acct
     return None
 
 
-def authenticate_user(identifier: str, password: str, expected_role: str | None = None) -> tuple[dict | None, str | None, int]:
-    """Validate credentials and verify live on-chain organization approval state.
-    Returns (session_Response_dict, error_dict_or_none, http_status).
+def find_admin_account(
+    identifier: str | None = None,
+    username: str | None = None,
+    email: str | None = None,
+) -> tuple[dict | None, str | None]:
+    """Find an administrator account, validating that username and email match the SAME account.
+    Returns (account_dict_or_None, error_code_or_None).
     """
-    acct = find_account_by_identifier(identifier)
-    if not acct or not check_password_hash(acct.get("password_hash", ""), password or ""):
-        return None, {
-            "error": "Invalid username/email or password.",
-            "code": "INVALID_CREDENTIALS",
-        }, 401
+    store = load_store()
+    admin_accounts = [acct for acct in store.values() if acct.get("role", "").lower() == "admin"]
+    if not admin_accounts:
+        return None, "ADMIN_NOT_PROVISIONED"
 
-    actual_role = acct.get("role", "").lower()
-    if expected_role:
-        req_role = expected_role.strip().lower()
+    u_clean = (username or "").strip().lower()
+    e_clean = (email or "").strip().lower()
+    i_clean = (identifier or "").strip().lower()
+
+    if not e_clean and "@" in i_clean:
+        e_clean = i_clean
+    if not u_clean and i_clean and "@" not in i_clean:
+        u_clean = i_clean
+
+    acct_by_email = None
+    acct_by_user = None
+
+    if e_clean:
+        for acct in admin_accounts:
+            if acct.get("email", "").lower() == e_clean:
+                acct_by_email = acct
+                break
+
+    if u_clean:
+        for acct in admin_accounts:
+            if acct.get("username", "").lower() == u_clean:
+                acct_by_user = acct
+                break
+
+    if e_clean and u_clean:
+        if not acct_by_email or not acct_by_user:
+            return None, "INVALID_CREDENTIALS"
+        if acct_by_email.get("username", "").lower() != acct_by_user.get("username", "").lower():
+            return None, "CREDENTIAL_MISMATCH"
+        return acct_by_email, None
+
+    if acct_by_email:
+        return acct_by_email, None
+    if acct_by_user:
+        return acct_by_user, None
+
+    return None, "INVALID_CREDENTIALS"
+
+
+def authenticate_user(
+    identifier: str | None = None,
+    password: str = "",
+    expected_role: str | None = None,
+    username: str | None = None,
+    email: str | None = None,
+) -> tuple[dict | None, dict | None, int]:
+    """Validate credentials and verify live on-chain organization approval state.
+    Returns (session_response_dict, error_dict_or_none, http_status).
+    """
+    req_role = (expected_role or "").strip().lower() if expected_role else None
+
+    if req_role == "admin":
+        if not has_admin_account():
+            return None, {
+                "error": "No administrator account has been provisioned yet. Please complete initial Administrator setup first.",
+                "code": "ADMIN_NOT_PROVISIONED",
+            }, 403
+
+        acct, err_code = find_admin_account(identifier=identifier, username=username, email=email)
+        if err_code == "CREDENTIAL_MISMATCH":
+            return None, {
+                "error": "Administrator email and username do not match the same account.",
+                "code": "CREDENTIAL_MISMATCH",
+            }, 401
+        if not acct:
+            return None, {
+                "error": "Invalid administrator username/email or password.",
+                "code": "INVALID_CREDENTIALS",
+            }, 401
+
+        if not check_password_hash(acct.get("password_hash", ""), password or ""):
+            return None, {
+                "error": "Invalid administrator username/email or password.",
+                "code": "INVALID_CREDENTIALS",
+            }, 401
+
+        actual_role = "admin"
+        address = acct["address"]
+    else:
+        ident = (identifier or username or email or "").strip().lower()
+        acct = find_account_by_identifier(ident)
+        if not acct or not check_password_hash(acct.get("password_hash", ""), password or ""):
+            return None, {
+                "error": "Invalid username/email or password.",
+                "code": "INVALID_CREDENTIALS",
+            }, 401
+
+        actual_role = acct.get("role", "").lower()
         if req_role and actual_role != req_role:
             return None, {
                 "error": f"Role mismatch: This account is registered as '{actual_role.capitalize()}', not '{req_role.capitalize()}'. Please use the {actual_role.capitalize()} sign-in page.",
@@ -332,9 +604,8 @@ def authenticate_user(identifier: str, password: str, expected_role: str | None 
                 "registered_role": actual_role,
             }, 403
 
-    address = acct["address"]
+        address = acct["address"]
 
-    # Query on-chain status if blockchain is connected
     if not blockchain.is_connected():
         return None, {
             "error": "Blockchain node is currently unreachable. Cannot verify on-chain organization authorization.",
@@ -349,8 +620,14 @@ def authenticate_user(identifier: str, password: str, expected_role: str | None 
             "code": "BLOCKCHAIN_READ_ERROR",
         }, 500
 
-    # Admin is root deployer; check non-admin roles on-chain
-    if actual_role != "admin":
+    if actual_role == "admin":
+        expected_admin_addr = _resolve_admin_address()
+        if address.lower() != expected_admin_addr.lower() or chain_user.get("role", 0) != 1:
+            return None, {
+                "error": "Access denied: Account is not bound to the authorized smart-contract Administrator wallet.",
+                "code": "UNAUTHORIZED_ADMIN_ADDRESS",
+            }, 403
+    else:
         status_name = chain_user.get("status_name", "Pending")
         role_num = chain_user.get("role", 0)
         if role_num == 0:
@@ -389,6 +666,7 @@ def authenticate_user(identifier: str, password: str, expected_role: str | None 
     profile = {
         **chain_user,
         "address": address,
+        "name": acct.get("name", acct["username"]),
         "username": acct["username"],
         "email": acct["email"],
         "org_name": chain_user.get("name") or acct["org_name"],
@@ -398,6 +676,7 @@ def authenticate_user(identifier: str, password: str, expected_role: str | None 
         "license_number": acct.get("license_number", ""),
         "contact_phone": acct.get("contact_phone", ""),
         "location": acct.get("location", ""),
+        "must_change_password": acct.get("must_change_password", False),
     }
     return {
         "success": True,
@@ -405,3 +684,50 @@ def authenticate_user(identifier: str, password: str, expected_role: str | None 
         "user": profile,
         "auth_mode": "server_hmac_session_with_onchain_rbac",
     }, None, 200
+
+
+def change_password(*, identifier_or_username: str, current_password: str, new_password: str) -> tuple[bool, str | None]:
+    """Change an account's password securely."""
+    if not new_password or len(new_password.strip()) < 6:
+        return False, "New password must be at least 6 characters."
+
+    store = load_store()
+    ident = (identifier_or_username or "").strip().lower()
+    target_key = None
+    target_acct = None
+
+    for key, acct in store.items():
+        if acct.get("username", "").lower() == ident or acct.get("email", "").lower() == ident:
+            target_key = key
+            target_acct = acct
+            break
+
+    if not target_acct:
+        return False, "Account not found."
+
+    if not check_password_hash(target_acct.get("password_hash", ""), current_password):
+        return False, "Current password is incorrect."
+
+    target_acct["password_hash"] = generate_password_hash(new_password.strip(), method="pbkdf2:sha256")
+    target_acct["must_change_password"] = False
+    store[target_key] = target_acct
+    save_store(store)
+    return True, None
+
+
+def get_admin_profiles() -> list[dict]:
+    """Return non-sensitive profile summaries for all provisioned administrators."""
+    store = load_store()
+    profiles = []
+    for acct in store.values():
+        if acct.get("role", "").lower() == "admin":
+            profiles.append({
+                "name": acct.get("name", acct.get("username", "")),
+                "username": acct.get("username", ""),
+                "email": acct.get("email", ""),
+                "role": "admin",
+                "org_name": acct.get("org_name", ""),
+                "created_at": acct.get("created_at"),
+                "must_change_password": acct.get("must_change_password", False),
+            })
+    return profiles

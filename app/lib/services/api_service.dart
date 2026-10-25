@@ -144,28 +144,6 @@ class MockApiService implements ApiService {
       return const VerifyResult(VerifyStatus.unavailable);
     }
 
-    if (key == 'BATCH101') {
-      return const VerifyResult(
-        VerifyStatus.found,
-        Batch(
-          'BATCH101',
-          'Paracetamol 500mg',
-          'Sun Pharma',
-          '2027-08-31',
-          5000,
-          [
-            TransferEvent('Sun Pharma', 'MedLine Distributors', '2026-09-02'),
-            TransferEvent(
-              'MedLine Distributors',
-              'City Wholesale',
-              '2026-09-10',
-            ),
-            TransferEvent('City Wholesale', 'Apollo Pharmacy', '2026-09-20'),
-          ],
-        ),
-      );
-    }
-
     return const VerifyResult(VerifyStatus.unknown);
   }
 }
@@ -293,18 +271,28 @@ class FlaskApiService implements ApiService {
     required String identifier,
     required String password,
     required String expectedRole,
+    String? username,
+    String? email,
   }) async {
     final http.Response response;
+    final Map<String, dynamic> bodyData = {
+      'identifier': identifier.trim(),
+      'password': password,
+      'expected_role': expectedRole.toLowerCase().trim(),
+    };
+    if (username != null && username.trim().isNotEmpty) {
+      bodyData['username'] = username.trim();
+    }
+    if (email != null && email.trim().isNotEmpty) {
+      bodyData['email'] = email.trim();
+    }
+
     try {
       response = await _client
           .post(
             Uri.parse('$baseUrl/api/auth/login'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'identifier': identifier.trim(),
-              'password': password,
-              'expected_role': expectedRole.toLowerCase().trim(),
-            }),
+            body: jsonEncode(bodyData),
           )
           .timeout(const Duration(seconds: 12));
     } catch (_) {
@@ -523,7 +511,16 @@ class FlaskApiService implements ApiService {
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final list = data['users'] as List? ?? [];
-    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    return list
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .where(
+          (u) =>
+              u['is_admin'] != true &&
+              u['is_organization'] != false &&
+              (u['role_name'] ?? '').toString() != 'Admin' &&
+              (u['role'] ?? '').toString().toLowerCase() != 'admin',
+        )
+        .toList();
   }
 
   Future<Map<String, dynamic>> registerUser({
@@ -709,6 +706,50 @@ class FlaskApiService implements ApiService {
     }
 
     return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<bool> getAdminStatus() async {
+    try {
+      final response = await _client
+          .get(Uri.parse('$baseUrl/api/auth/admin-status'))
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return data['admin_provisioned'] == true;
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  Future<Map<String, dynamic>> bootstrapInitialAdmin({
+    required String username,
+    required String email,
+    required String password,
+    String orgName = 'PharmaTrace Regulatory Authority',
+  }) async {
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/api/auth/bootstrap-admin'),
+          headers: _headers(),
+          body: jsonEncode({
+            'username': username.trim(),
+            'email': email.trim(),
+            'password': password,
+            'org_name': orgName.trim(),
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        (data['error'] ?? 'Administrator provisioning failed.').toString(),
+        code: (data['code'] ?? 'BOOTSTRAP_FAILED').toString(),
+        statusCode: response.statusCode,
+        data: data,
+      );
+    }
+    return data;
   }
 
   Future<Map<String, dynamic>> recallMedicine({
