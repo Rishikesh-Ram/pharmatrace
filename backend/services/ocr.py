@@ -1,4 +1,3 @@
-
 """OCR extraction and reference comparison for PharmaTrace."""
 import os
 import re
@@ -23,8 +22,8 @@ MONTHS = {
 }
 
 _BATCH_RE = re.compile(
-    r"(?:batch\s*(?:no\.?|number)?|b\.?\s*no\.?|lot)"
-    r"\s*[:.\-]?\s*([A-Z0-9][A-Z0-9/\-]{2,})",
+    r"\b(?:batch(?:\s*(?:no\.?|number))?|b\.?\s*no\.?|lot(?:(?:\s*no\.?|number))?)"
+    r"(?:[:.\s\-]+)([A-Z0-9][A-Z0-9/\-]{2,})",
     re.I,
 )
 

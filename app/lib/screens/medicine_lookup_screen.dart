@@ -1,9 +1,10 @@
-
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 
 class MedicineLookupScreen extends StatefulWidget {
-  const MedicineLookupScreen({super.key});
+  final String? initialQuery;
+
+  const MedicineLookupScreen({super.key, this.initialQuery});
 
   @override
   State<MedicineLookupScreen> createState() =>
@@ -17,6 +18,16 @@ class _MedicineLookupScreenState
 
   VerifyResult? _result;
   bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final q = widget.initialQuery?.trim() ?? '';
+    if (q.isNotEmpty) {
+      _controller.text = q;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _lookup());
+    }
+  }
 
   Future<void> _lookup() async {
     final id = _controller.text.trim();
@@ -82,7 +93,7 @@ class _MedicineLookupScreenState
               const SizedBox(height: 8),
               const Text(
                 'Enter a medicine or batch ID to view its '
-                'record and available supply-chain history.',
+                'record and live supply-chain history from the blockchain.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 28),
@@ -90,11 +101,11 @@ class _MedicineLookupScreenState
                 controller: _controller,
                 textInputAction: TextInputAction.search,
                 onSubmitted: (_) => _lookup(),
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'Medicine / Batch ID',
-                  hintText: 'e.g. PT-DEMO-003',
-                  prefixIcon: const Icon(Icons.medication_outlined),
-                  border: const OutlineInputBorder(),
+                  hintText: 'e.g. PT-TEST-002 or BATCH-DEMO-001',
+                  prefixIcon: Icon(Icons.medication_outlined),
+                  border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 14),
@@ -108,11 +119,12 @@ class _MedicineLookupScreenState
                           height: 18,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
+                            color: Colors.white,
                           ),
                         )
                       : const Icon(Icons.search),
                   label: Text(
-                    _loading ? 'Searching...' : 'Look up medicine',
+                    _loading ? 'Searching blockchain...' : 'Look up medicine',
                   ),
                 ),
               ),
@@ -148,7 +160,8 @@ class _MedicineLookupScreenState
           leading: Icon(Icons.search_off, color: Colors.red),
           title: Text('No matching record'),
           subtitle: Text(
-            'No medicine record was found for this ID.',
+            'No registered medicine record was found on the blockchain for this ID. '
+            'Warning: This package may be counterfeit.',
           ),
         ),
       );
@@ -157,6 +170,8 @@ class _MedicineLookupScreenState
     final batch = result.batch!;
 
     return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -179,29 +194,47 @@ class _MedicineLookupScreenState
                     ),
                   ),
                 ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.teal.shade200),
+                  ),
+                  child: Text(
+                    batch.stageName,
+                    style: TextStyle(
+                      color: Colors.teal.shade900,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
               ],
             ),
             const Divider(height: 28),
             _detail('Medicine / Batch ID', batch.id),
-            _detail('Manufacturer', batch.manufacturer),
-            _detail('Expiry', batch.expiry),
+            _detail('Manufacturer Wallet', batch.manufacturer),
+            _detail('Expiry Date', batch.expiry),
+            _detail('Batch Quantity', '${batch.quantity} units'),
+            _detail('Supply-Chain Stage', batch.stageName),
             if (batch.recalled)
               _status(
                 'RECALLED',
                 batch.recallReason.isEmpty
-                    ? 'This record is marked as recalled.'
+                    ? 'This record is marked as recalled by manufacturer or admin.'
                     : batch.recallReason,
                 Colors.red,
               ),
             if (batch.expired)
               _status(
                 'EXPIRED',
-                'The recorded expiry date has passed.',
+                'The recorded expiry date has passed. Do not consume.',
                 Colors.orange,
               ),
             const SizedBox(height: 20),
             const Text(
-              'Supply-chain history',
+              'Blockchain Supply-Chain History',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,
@@ -222,14 +255,68 @@ class _MedicineLookupScreenState
                   subtitle: Text(event.date),
                 ),
               ),
-            const SizedBox(height: 8),
-            const Text(
-              'A matching record does not by itself prove that '
-              'the physical medicine is genuine. Use the '
-              'verification process for authenticity checks.',
-              style: TextStyle(
-                color: Colors.black54,
-                fontSize: 12,
+            if (batch.distributorDetails.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: Colors.blue.shade50,
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Distributor Hub Receipt Log:',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(batch.distributorDetails, style: const TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (batch.pharmacyDetails.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: Colors.green.shade50,
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Pharmacy Receipt Log:',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(batch.pharmacyDetails, style: const TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, size: 18, color: Colors.black54),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Notice: A matching database or blockchain record alone does not prove '
+                      'physical packaging authenticity. For high-assurance verification, '
+                      'scan the physical packaging with the Verification tool.',
+                      style: TextStyle(color: Colors.black87, fontSize: 11),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

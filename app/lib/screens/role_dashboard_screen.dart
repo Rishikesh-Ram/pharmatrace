@@ -5,6 +5,7 @@ import '../models/user_role.dart';
 import 'home_screen.dart';
 import 'register_batch_screen.dart';
 import 'role_login_screen.dart';
+import '../services/api_service.dart';
 
 class RoleDashboardScreen extends StatefulWidget {
   final UserRole role;
@@ -26,6 +27,178 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
   static const Color line = Color(0xFFE5ECEB);
 
   String selectedPage = 'Dashboard';
+
+  final _receiptMedIdController = TextEditingController();
+  final _receiptDetailsController = TextEditingController();
+  final _quickLookupController = TextEditingController();
+  bool _receiptLoading = false;
+  String? _receiptFeedback;
+  bool _receiptSuccess = false;
+
+  List<Map<String, dynamic>>? _liveUsers;
+  bool _loadingUsers = false;
+
+  List<Batch>? _liveBatches;
+  bool _loadingBatches = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLiveUsers();
+    _fetchBatches();
+  }
+
+  Future<void> _fetchBatches() async {
+    setState(() => _loadingBatches = true);
+    try {
+      final batches = await api.getBatches();
+      if (mounted) {
+        setState(() {
+          _liveBatches = batches;
+          _loadingBatches = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingBatches = false);
+    }
+  }
+
+  Future<void> _fetchLiveUsers() async {
+    setState(() => _loadingUsers = true);
+    try {
+      final users = await api.getUsers();
+      if (mounted) {
+        setState(() {
+          _liveUsers = users;
+          _loadingUsers = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingUsers = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _receiptMedIdController.dispose();
+    _receiptDetailsController.dispose();
+    _quickLookupController.dispose();
+    super.dispose();
+  }
+
+  void _openRegisterOrgDialog() {
+    final nameCtrl = TextEditingController();
+    String selectedOrgRole = widget.role == UserRole.distributor ? 'pharmacy' : 'distributor';
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Register Organization'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Organization Name',
+                  hintText: 'e.g. CityCare Logistics',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: selectedOrgRole,
+                items: const [
+                  DropdownMenuItem(value: 'manufacturer', child: Text('Manufacturer')),
+                  DropdownMenuItem(value: 'distributor', child: Text('Distributor')),
+                  DropdownMenuItem(value: 'pharmacy', child: Text('Pharmacy')),
+                ],
+                onChanged: (v) => setDialogState(() => selectedOrgRole = v ?? 'distributor'),
+                decoration: const InputDecoration(labelText: 'Role'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                Navigator.pop(ctx);
+                try {
+                  await api.registerUser(role: selectedOrgRole, name: name);
+                  _showDemoMessage('Registration submitted for $name. Awaiting approval.');
+                  _fetchLiveUsers();
+                } catch (e) {
+                  _showDemoMessage('Registration failed: $e');
+                }
+              },
+              child: const Text('Register'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+
+  void _openRecallDialog(Batch batch) {
+    final reasonCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Recall Batch ${batch.id}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Recalling ${batch.medicine} will permanently mark this batch as recalled on the blockchain and block any further supply-chain receipts or consumer verification.',
+              style: const TextStyle(fontSize: 13, color: Colors.black54),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Recall Reason',
+                hintText: 'e.g. Packaging seal defect detected in QC',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () async {
+              final reason = reasonCtrl.text.trim();
+              if (reason.isEmpty) return;
+              Navigator.pop(ctx);
+              try {
+                final res = await api.recallMedicine(
+                  medicineId: batch.id,
+                  reason: reason,
+                  role: widget.role == UserRole.admin ? 'admin' : 'manufacturer',
+                );
+                _showDemoMessage(res['message'] ?? 'Batch recalled on blockchain');
+                _fetchBatches();
+              } catch (e) {
+                _showDemoMessage('Recall failed: $e');
+              }
+            },
+            child: const Text('Confirm Recall'),
+          ),
+        ],
+      ),
+    );
+  }
 
   List<_NavItem> get navItems {
     switch (widget.role) {
@@ -55,6 +228,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
           _NavItem('Verify medicine', Icons.fact_check_outlined),
           _NavItem('Incoming batches', Icons.move_to_inbox_outlined),
           _NavItem('Record receipt', Icons.receipt_long_outlined),
+          _NavItem('Partner approvals', Icons.approval_outlined),
           _NavItem('Shipments', Icons.local_shipping_outlined),
           _NavItem('Activity log', Icons.history),
         ];
@@ -594,41 +768,49 @@ void openExistingScreen(String page) {
   }
 
   List<_StatData> _overviewCards() {
+    final batchCount = (_liveBatches?.length ?? 0).toString().padLeft(2, '0');
+    final userCount = (_liveUsers?.length ?? 0).toString().padLeft(2, '0');
+    final pendingCount = (_liveUsers?.where((u) => u['status_name'] == 'Pending').length ?? 0).toString().padLeft(2, '0');
+    final distCount = (_liveUsers?.where((u) => u['role_name'] == 'Distributor').length ?? 0).toString().padLeft(2, '0');
+    final stage1Count = (_liveBatches?.where((b) => b.stage == 1).length ?? 0).toString().padLeft(2, '0');
+    final stage2Count = (_liveBatches?.where((b) => b.stage == 2).length ?? 0).toString().padLeft(2, '0');
+    final stage3Count = (_liveBatches?.where((b) => b.stage == 3).length ?? 0).toString().padLeft(2, '0');
+
     switch (widget.role) {
       case UserRole.admin:
-        return const [
-          _StatData('Organizations', '08', Icons.business_outlined),
-          _StatData('Pending approvals', '03', Icons.pending_actions),
-          _StatData('Medicine records', '24', Icons.medication_outlined),
-          _StatData('Recent activities', '12', Icons.history),
+        return [
+          _StatData('Organizations', userCount, Icons.business_outlined),
+          _StatData('Pending approvals', pendingCount, Icons.pending_actions),
+          _StatData('Medicine records', batchCount, Icons.medication_outlined),
+          const _StatData('Blockchain node', 'Active', Icons.verified_user_outlined),
         ];
       case UserRole.manufacturer:
-        return const [
-          _StatData('Registered batches', '12', Icons.inventory_2_outlined),
-          _StatData('Distributors', '05', Icons.local_shipping_outlined),
-          _StatData('Pending requests', '02', Icons.pending_actions),
-          _StatData('Medicine recalls', '00', Icons.report_outlined),
+        return [
+          _StatData('Registered batches', batchCount, Icons.inventory_2_outlined),
+          _StatData('Distributors', distCount, Icons.local_shipping_outlined),
+          _StatData('Pending requests', pendingCount, Icons.pending_actions),
+          _StatData('Medicine recalls', (_liveBatches?.where((b) => b.recalled).length ?? 0).toString().padLeft(2, '0'), Icons.report_outlined),
         ];
       case UserRole.distributor:
-        return const [
-          _StatData('Incoming batches', '06', Icons.move_to_inbox_outlined),
-          _StatData('Shipments', '09', Icons.local_shipping_outlined),
-          _StatData('Receipts pending', '02', Icons.receipt_long_outlined),
-          _StatData('Flagged batches', '01', Icons.flag_outlined),
+        return [
+          _StatData('Incoming batches', stage1Count, Icons.move_to_inbox_outlined),
+          _StatData('In custody (Stage 2)', stage2Count, Icons.local_shipping_outlined),
+          _StatData('Delivered (Stage 3)', stage3Count, Icons.inventory_outlined),
+          _StatData('Total batches', batchCount, Icons.receipt_long_outlined),
         ];
       case UserRole.pharmacy:
-        return const [
-          _StatData('Medicine stock', '18', Icons.inventory_2_outlined),
-          _StatData('Incoming batches', '04', Icons.move_to_inbox_outlined),
-          _StatData('Receipts pending', '01', Icons.receipt_long_outlined),
-          _StatData('Flagged batches', '00', Icons.flag_outlined),
+        return [
+          _StatData('Medicine stock (Stage 3)', stage3Count, Icons.inventory_2_outlined),
+          _StatData('Incoming stock (Stage 2)', stage2Count, Icons.move_to_inbox_outlined),
+          _StatData('Receipts pending', stage2Count, Icons.receipt_long_outlined),
+          const _StatData('Flagged batches', '00', Icons.flag_outlined),
         ];
       case UserRole.consumer:
-        return const [
-          _StatData('Scan medicine', 'QR', Icons.qr_code_scanner),
-          _StatData('Medicine lookup', 'ID', Icons.search_outlined),
-          _StatData('Supply history', 'View', Icons.timeline),
-          _StatData('Safety information', 'Info', Icons.health_and_safety_outlined),
+        return [
+          const _StatData('Scan medicine', 'QR', Icons.qr_code_scanner),
+          const _StatData('Medicine lookup', 'ID', Icons.search_outlined),
+          _StatData('Verified batches', stage3Count, Icons.timeline),
+          const _StatData('Safety status', 'Active', Icons.health_and_safety_outlined),
         ];
     }
   }
@@ -823,7 +1005,8 @@ void openExistingScreen(String page) {
 
     final showApprovals =
         selectedPage == 'Organization approvals' ||
-        selectedPage == 'Distributors';
+        selectedPage == 'Distributors' ||
+        selectedPage == 'Partner approvals';
     final showReceipts = selectedPage == 'Record receipt';
     final showBatches =
         selectedPage == 'Medicine batches' ||
@@ -870,60 +1053,299 @@ else
   }
 
   Widget _buildApprovalSection(bool isAdmin) {
-    final title = isAdmin ? 'Organization requests' : 'Distributor requests';
-    final names = isAdmin
-        ? ['Demo Manufacturer', 'Demo Distributor', 'Demo Pharmacy']
-        : ['Northside Distribution', 'CityCare Logistics'];
+    final title = isAdmin ? 'Organization Approvals' : 'Partner Approvals';
 
     return _sectionCard(
       title,
       Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final name in names)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFE5F4F1),
-                child: Icon(Icons.business_outlined, color: teal),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Live Blockchain Registry',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.bold),
               ),
-              title: Text(name),
-              subtitle: const Text('Sample request • Demo status'),
-              trailing: OutlinedButton(
-                onPressed: () => _showDemoMessage(
-                  'Approval actions will be connected later.',
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    tooltip: 'Refresh',
+                    onPressed: _fetchLiveUsers,
+                  ),
+                  TextButton.icon(
+                    onPressed: _openRegisterOrgDialog,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Register New Org'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_loadingUsers)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_liveUsers == null || _liveUsers!.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No registered organizations found on the blockchain.'),
+            )
+          else
+            ..._liveUsers!.map((u) {
+              final isPending = u['status_name'] == 'Pending';
+              final isActive = u['status_name'] == 'Active';
+              final roleName = u['role_name'] ?? 'Unknown';
+              final name = u['name'] ?? 'Unnamed';
+              final addr = u['address'] ?? '';
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: line),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Text('Review'),
-              ),
-            ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: isActive ? Colors.green.shade50 : Colors.orange.shade50,
+                      child: Icon(
+                        roleName == 'Manufacturer'
+                            ? Icons.factory_outlined
+                            : roleName == 'Distributor'
+                                ? Icons.local_shipping_outlined
+                                : Icons.local_pharmacy_outlined,
+                        color: isActive ? Colors.green : Colors.orange,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: isActive ? Colors.green.shade50 : Colors.orange.shade50,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  u['status_name'] ?? '',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: isActive ? Colors.green.shade800 : Colors.orange.shade800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$roleName • $addr',
+                            style: const TextStyle(fontSize: 11, color: Colors.black54),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (roleName != 'Admin') ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              roleName == 'Manufacturer'
+                                  ? 'Approvals: Admin ${u["adminOk"] == true ? "✓" : "Pending"}'
+                                  : roleName == 'Distributor'
+                                      ? 'Approvals: Admin ${u["adminOk"] == true ? "✓" : "Pending"} • Manufacturer ${u["mfrOk"] == true ? "✓" : "Pending"}'
+                                      : 'Approvals: Admin ${u["adminOk"] == true ? "✓" : "Pending"} • Mfr ${u["mfrOk"] == true ? "✓" : "Pending"} • Dist ${u["distOk"] == true ? "✓" : "Pending"}',
+                              style: const TextStyle(fontSize: 11, color: teal, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    if (isPending)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          FilledButton.tonal(
+                            onPressed: () async {
+                              try {
+                                final res = await api.approveUser(
+                                  target: addr,
+                                  approverRole: widget.role.name,
+                                );
+                                _showDemoMessage(res['message'] ?? 'Approved successfully');
+                                _fetchLiveUsers();
+                              } catch (e) {
+                                _showDemoMessage('Approval failed: $e');
+                              }
+                            },
+                            child: const Text('Approve'),
+                          ),
+                          const SizedBox(width: 6),
+                          OutlinedButton(
+                            onPressed: () async {
+                              try {
+                                final res = await api.rejectUser(
+                                  target: addr,
+                                  rejecterRole: widget.role.name,
+                                );
+                                _showDemoMessage(res['message'] ?? 'Rejected');
+                                _fetchLiveUsers();
+                              } catch (e) {
+                                _showDemoMessage('Rejection failed: $e');
+                              }
+                            },
+                            child: const Text('Reject'),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
   }
 
   Widget _buildReceiptSection() {
+    final isPharmacy = widget.role == UserRole.pharmacy;
+    final stageTarget = isPharmacy ? 'Pharmacy (Stage 3)' : 'Distributor (Stage 2)';
+
     return _sectionCard(
-      'Record a medicine receipt',
+      'Record Medicine Receipt — $stageTarget',
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'This demo form previews the receipt workflow. '
-            'It does not save a receipt to the backend or blockchain.',
+            'Confirm receipt of medicine batch and append immutable receipt details to the blockchain supply-chain timeline.',
             style: TextStyle(color: Colors.black54, height: 1.5),
           ),
-          const SizedBox(height: 16),
-          const _DemoInput(label: 'Medicine / batch ID'),
-          const SizedBox(height: 12),
-          const _DemoInput(label: 'Quantity received'),
-          const SizedBox(height: 12),
-          const _DemoInput(label: 'Supplier / dispatched by'),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: () => _showDemoMessage(
-              'Receipt form preview only. Saving will be implemented later.',
+          const SizedBox(height: 18),
+          if (_receiptFeedback != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _receiptSuccess ? Colors.green.shade50 : Colors.red.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _receiptSuccess ? Colors.green.shade300 : Colors.red.shade300,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _receiptSuccess ? Icons.check_circle : Icons.error_outline,
+                    color: _receiptSuccess ? Colors.green : Colors.red,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _receiptFeedback!,
+                      style: TextStyle(
+                        color: _receiptSuccess ? Colors.green.shade900 : Colors.red.shade900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            icon: const Icon(Icons.receipt_long_outlined),
-            label: const Text('Preview receipt action'),
+          TextField(
+            controller: _receiptMedIdController,
+            decoration: const InputDecoration(
+              labelText: 'Medicine ID or Batch Number',
+              hintText: 'e.g. PT-TEST-002 or BATCH-DEMO-001',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.qr_code),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _receiptDetailsController,
+            maxLines: 3,
+            decoration: InputDecoration(
+              labelText: 'Receipt & Inspection Notes',
+              hintText: isPharmacy
+                  ? 'e.g. Stock received from distributor. Sealed packaging intact. Shelf location A-4.'
+                  : 'e.g. Batch received from manufacturer at Central Hub. Storage temp 20C.',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.notes),
+            ),
+          ),
+          const SizedBox(height: 18),
+          SizedBox(
+            height: 48,
+            child: FilledButton.icon(
+              onPressed: _receiptLoading
+                  ? null
+                  : () async {
+                      final id = _receiptMedIdController.text.trim();
+                      final details = _receiptDetailsController.text.trim();
+                      if (id.isEmpty) {
+                        _showDemoMessage('Please enter a medicine or batch ID');
+                        return;
+                      }
+
+                      setState(() {
+                        _receiptLoading = true;
+                        _receiptFeedback = null;
+                      });
+
+                      try {
+                        final Map<String, dynamic> res;
+                        if (isPharmacy) {
+                          res = await api.recordPharmacyReceipt(
+                            medicineId: id,
+                            details: details.isEmpty ? 'Received at pharmacy' : details,
+                          );
+                        } else {
+                          res = await api.recordDistributorReceipt(
+                            medicineId: id,
+                            details: details.isEmpty ? 'Received at distributor' : details,
+                          );
+                        }
+
+                        setState(() {
+                          _receiptLoading = false;
+                          _receiptSuccess = true;
+                          _receiptFeedback = res['message'] ?? 'Receipt successfully recorded on blockchain!';
+                        });
+                        _fetchBatches();
+                      } catch (e) {
+                        setState(() {
+                          _receiptLoading = false;
+                          _receiptSuccess = false;
+                          _receiptFeedback = e.toString().replaceAll('Exception: ', '');
+                        });
+                      }
+                    },
+              icon: _receiptLoading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.verified),
+              label: Text(
+                _receiptLoading
+                    ? 'Recording on blockchain...'
+                    : isPharmacy
+                        ? 'Confirm Pharmacy Receipt (Stage 3)'
+                        : 'Confirm Distributor Receipt (Stage 2)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
           ),
         ],
       ),
@@ -931,136 +1353,387 @@ else
   }
 
   Widget _buildBatchSection() {
-    final rows = [
-      ['PT-DEMO-001', 'Sample medicine A', 'Demo'],
-      ['PT-DEMO-002', 'Sample medicine B', 'Demo'],
-      ['PT-DEMO-003', 'Sample medicine C', 'Demo'],
-    ];
+    final title = switch (selectedPage) {
+      'Incoming batches' => 'Incoming Batches from Manufacturers (Stage 1)',
+      'Incoming stock' => 'Incoming Stock from Distributors (Stage 2)',
+      'Medicine records' => 'All Blockchain Medicine Records',
+      'Shipments' => 'Supply Chain Transfers & Shipments',
+      _ => 'Registered Medicine Batches',
+    };
+
+    final isDistributorIncoming = selectedPage == 'Incoming batches';
+    final isPharmacyIncoming = selectedPage == 'Incoming stock';
+
+    List<Batch> displayedBatches = _liveBatches ?? [];
+    if (isDistributorIncoming) {
+      displayedBatches = displayedBatches.where((b) => b.stage == 1).toList();
+    } else if (isPharmacyIncoming) {
+      displayedBatches = displayedBatches.where((b) => b.stage == 2).toList();
+    }
 
     return _sectionCard(
-      'Medicine records',
+      title,
       Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
               Expanded(
-                child: Text(
-                  'BATCH ID',
-                  style: TextStyle(
-                    color: Colors.black54,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
+                child: TextField(
+                  controller: _quickLookupController,
+                  decoration: const InputDecoration(
+                    hintText: 'Lookup batch ID (e.g. PT-TEST-002)',
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
+                  onSubmitted: (v) {
+                    if (v.trim().isNotEmpty) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MedicineLookupScreen(initialQuery: v.trim()),
+                        ),
+                      );
+                    }
+                  },
                 ),
               ),
-              Expanded(
-                child: Text(
-                  'MEDICINE',
-                  style: TextStyle(
-                    color: Colors.black54,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+              const SizedBox(width: 10),
+              FilledButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => MedicineLookupScreen(
+                        initialQuery: _quickLookupController.text.trim(),
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Search'),
               ),
-              Text(
-                'SOURCE',
-                style: TextStyle(
-                  color: Colors.black54,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh batches',
+                onPressed: _fetchBatches,
               ),
             ],
           ),
-          const Divider(height: 24),
-          for (final row in rows) ...[
-            Row(
-              children: [
-                Expanded(child: Text(row[0])),
-                Expanded(child: Text(row[1])),
-                Text(
-                  row[2],
-                  style: const TextStyle(
-                    color: Colors.deepOrange,
-                    fontSize: 11,
+          const SizedBox(height: 20),
+          if (_loadingBatches)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (displayedBatches.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFBBF7D0)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: teal, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      isDistributorIncoming
+                          ? 'No batches currently at Stage 1 waiting for distributor receipt. Register new batches from the Manufacturer workspace.'
+                          : isPharmacyIncoming
+                              ? 'No batches currently at Stage 2 waiting for pharmacy receipt. Record distributor receipt first.'
+                              : 'No medicine batches found on the blockchain.',
+                      style: const TextStyle(fontSize: 13, color: ink, height: 1.4),
+                    ),
                   ),
+                ],
+              ),
+            )
+          else
+            ...displayedBatches.map((batch) {
+              final stageColor = switch (batch.stage) {
+                1 => Colors.blue,
+                2 => Colors.orange,
+                3 => Colors.green,
+                _ => Colors.grey,
+              };
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: line),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-              ],
-            ),
-            const Divider(height: 24),
-          ],
-          const Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'These are sample display rows, not live database records.',
-              style: TextStyle(color: Colors.black45, fontSize: 11),
-            ),
-          ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: stageColor.withValues(alpha: 0.12),
+                      child: Icon(Icons.medication, color: stageColor),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                batch.medicine,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: stageColor.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  'Stage ${batch.stage}: ${batch.stageName}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: stageColor,
+                                  ),
+                                ),
+                              ),
+                              if (batch.recalled) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    'RECALLED',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.red.shade800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'ID: ${batch.id}  •  Qty: ${batch.quantity}  •  Exp: ${batch.expiry}',
+                            style: const TextStyle(fontSize: 12, color: Colors.black87),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Mfr: ${batch.manufacturer}',
+                            style: const TextStyle(fontSize: 11, color: Colors.black54),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      children: [
+                        if (isDistributorIncoming || (widget.role == UserRole.distributor && batch.stage == 1))
+                          FilledButton.tonal(
+                            onPressed: () {
+                              setState(() {
+                                _receiptMedIdController.text = batch.id;
+                                selectedPage = 'Record receipt';
+                              });
+                            },
+                            child: const Text('Receive Batch'),
+                          )
+                        else if (isPharmacyIncoming || (widget.role == UserRole.pharmacy && batch.stage == 2))
+                          FilledButton.tonal(
+                            onPressed: () {
+                              setState(() {
+                                _receiptMedIdController.text = batch.id;
+                                selectedPage = 'Record receipt';
+                              });
+                            },
+                            child: const Text('Receive Stock'),
+                          )
+                        else
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (!batch.recalled &&
+                                  (widget.role == UserRole.manufacturer ||
+                                      widget.role == UserRole.admin)) ...[
+                                OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.red.shade700,
+                                    side: BorderSide(color: Colors.red.shade300),
+                                  ),
+                                  onPressed: () => _openRecallDialog(batch),
+                                  child: const Text('Recall'),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              OutlinedButton(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => MedicineLookupScreen(
+                                        initialQuery: batch.id,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: const Text('View Details'),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
   }
 
-
   Widget _buildUserManagementSection() {
-    final users = [
-      ['Demo Manufacturer', 'Manufacturer', 'Approved'],
-      ['Demo Distributor', 'Distributor', 'Approved'],
-      ['Demo Pharmacy', 'Pharmacy', 'Pending'],
-      ['Demo Consumer', 'Consumer', 'Active'],
-    ];
-
     return _sectionCard(
-      'Registered users',
+      'Registered Organization Users',
       Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final user in users)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFE5F4F1),
-                child: Icon(Icons.person_outline, color: teal),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Live On-Chain Organization Accounts',
+                style: TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.bold),
               ),
-              title: Text(user[0]),
-              subtitle: Text(user[1]),
-              trailing: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
+              Row(
                 children: [
-                  Text(
-                    user[2],
-                    style: TextStyle(
-                      color: user[2] == 'Pending'
-                          ? Colors.deepOrange
-                          : teal,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                    ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    tooltip: 'Refresh',
+                    onPressed: _fetchLiveUsers,
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Demo',
-                    style: TextStyle(
-                      color: Colors.black45,
-                      fontSize: 10,
-                    ),
+                  TextButton.icon(
+                    onPressed: _openRegisterOrgDialog,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Register New Org'),
                   ),
                 ],
               ),
-            ),
-          const Divider(),
-          const Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Sample accounts only. Live user management '
-              'will be connected to the backend later.',
-              style: TextStyle(
-                color: Colors.black45,
-                fontSize: 11,
-              ),
-            ),
+            ],
           ),
+          const SizedBox(height: 12),
+          if (_loadingUsers)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_liveUsers == null || _liveUsers!.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('No registered organization accounts found on blockchain.'),
+            )
+          else
+            ..._liveUsers!.map((u) {
+              final isActive = u['status_name'] == 'Active';
+              final isPending = u['status_name'] == 'Pending';
+              final roleName = u['role_name'] ?? 'Unknown';
+              final name = u['name'] ?? 'Unnamed';
+              final addr = u['address'] ?? '';
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: line),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: isActive ? Colors.green.shade50 : Colors.orange.shade50,
+                      child: Icon(
+                        roleName == 'Manufacturer'
+                            ? Icons.factory_outlined
+                            : roleName == 'Distributor'
+                                ? Icons.local_shipping_outlined
+                                : roleName == 'Pharmacy'
+                                    ? Icons.local_pharmacy_outlined
+                                    : Icons.admin_panel_settings_outlined,
+                        color: isActive ? Colors.green : Colors.orange,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: isActive ? Colors.green.shade50 : Colors.orange.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  u['status_name'] ?? 'Active',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: isActive ? Colors.green.shade800 : Colors.orange.shade800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$roleName • $addr',
+                            style: const TextStyle(fontSize: 11, color: Colors.black54),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isPending && widget.role == UserRole.admin)
+                      FilledButton.tonal(
+                        onPressed: () async {
+                          try {
+                            final res = await api.approveUser(
+                              target: addr,
+                              approverRole: 'admin',
+                            );
+                            _showDemoMessage(res['message'] ?? 'Approved');
+                            _fetchLiveUsers();
+                          } catch (e) {
+                            _showDemoMessage('Approval failed: $e');
+                          }
+                        },
+                        child: const Text('Approve'),
+                      ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
@@ -1328,29 +2001,4 @@ class _ActivityData {
   final IconData icon;
 
   const _ActivityData(this.title, this.subtitle, this.icon);
-}
-
-class _DemoInput extends StatelessWidget {
-  final String label;
-
-  const _DemoInput({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      decoration: InputDecoration(
-        labelText: label,
-        filled: true,
-        fillColor: const Color(0xFFF7FAF9),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFE5ECEB)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFE5ECEB)),
-        ),
-      ),
-    );
-  }
 }
