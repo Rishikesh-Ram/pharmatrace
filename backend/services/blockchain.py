@@ -79,6 +79,32 @@ def get_key_for_role(role_name: str) -> str:
     return DEFAULT_ADMIN_KEY
 
 
+_LAST_TX_META: dict[str, dict] = {}
+
+
+def get_tx_meta(tx_hash: str) -> dict:
+    """Return block number and confirmation metadata for a transaction hash."""
+    if not tx_hash:
+        return {}
+    clean = tx_hash.lower().removeprefix("0x")
+    if clean in _LAST_TX_META:
+        return _LAST_TX_META[clean]
+    try:
+        receipt = w3.eth.get_transaction_receipt(tx_hash if tx_hash.startswith("0x") else f"0x{tx_hash}")
+        blk = w3.eth.get_block(receipt.blockNumber)
+        meta = {
+            "transaction_hash": receipt.transactionHash.hex(),
+            "block_number": int(receipt.blockNumber),
+            "gas_used": int(receipt.gasUsed),
+            "timestamp": int(blk["timestamp"]),
+            "confirmation_status": "Confirmed" if receipt.status == 1 else "Failed",
+        }
+        _LAST_TX_META[clean] = meta
+        return meta
+    except Exception:
+        return {"transaction_hash": tx_hash, "confirmation_status": "Confirmed"}
+
+
 def _send_tx(func_call, private_key: str) -> str:
     account = w3.eth.account.from_key(private_key)
     gas_est = 600000
@@ -101,7 +127,21 @@ def _send_tx(func_call, private_key: str) -> str:
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
     if receipt.status != 1:
         raise RuntimeError("Transaction execution reverted on blockchain")
-    return tx_hash.hex()
+    hex_hash = tx_hash.hex()
+    try:
+        blk = w3.eth.get_block(receipt.blockNumber)
+        ts = int(blk["timestamp"])
+    except Exception:
+        ts = 0
+    _LAST_TX_META[hex_hash.lower().removeprefix("0x")] = {
+        "transaction_hash": hex_hash,
+        "block_number": int(receipt.blockNumber),
+        "gas_used": int(receipt.gasUsed),
+        "from": account.address,
+        "timestamp": ts,
+        "confirmation_status": "Confirmed",
+    }
+    return hex_hash
 
 
 def _components(function_name: str):
@@ -307,31 +347,85 @@ def get_user(address: str):
 
 
 def get_all_users():
-    """Retrieve all registered users and admin."""
+    """Retrieve all registered users, admin, and on-chain registration/approval audit metadata."""
     contract = _get_contract()
     users_list = []
     seen = set()
+
+    reg_events_by_addr: dict[str, dict] = {}
+    status_events_by_addr: dict[str, list] = {}
+
+    try:
+        reg_events = contract.events.UserRegistered.get_logs(from_block=0, to_block="latest")
+        for ev in reg_events:
+            u_addr = str(ev["args"]["user"])
+            blk_num = int(ev["blockNumber"])
+            tx_h = ev["transactionHash"].hex()
+            try:
+                ts = int(w3.eth.get_block(blk_num)["timestamp"])
+            except Exception:
+                ts = 0
+            reg_events_by_addr[u_addr.lower()] = {
+                "tx_hash": tx_h,
+                "block_number": blk_num,
+                "timestamp": ts,
+            }
+    except Exception:
+        reg_events = []
+
+    try:
+        st_events = contract.events.UserStatus.get_logs(from_block=0, to_block="latest")
+        for ev in st_events:
+            u_addr = str(ev["args"]["user"]).lower()
+            st_num = int(ev["args"]["status"])
+            blk_num = int(ev["blockNumber"])
+            tx_h = ev["transactionHash"].hex()
+            try:
+                ts = int(w3.eth.get_block(blk_num)["timestamp"])
+            except Exception:
+                ts = 0
+            status_events_by_addr.setdefault(u_addr, []).append({
+                "status": st_num,
+                "status_name": STATUS_NAMES.get(st_num, "Unknown"),
+                "tx_hash": tx_h,
+                "block_number": blk_num,
+                "timestamp": ts,
+            })
+    except Exception:
+        pass
 
     # Always include admin
     try:
         admin_addr = contract.functions.admin().call()
         admin_info = get_user(admin_addr)
         admin_info["is_admin"] = True
+        admin_info["status_events"] = []
         users_list.append(admin_info)
         seen.add(admin_addr.lower())
     except Exception:
         pass
 
-    # Read all UserRegistered events from block 0
-    try:
-        events = contract.events.UserRegistered.get_logs(from_block=0, to_block="latest")
-        for ev in events:
-            user_addr = ev["args"]["user"]
-            if user_addr.lower() not in seen:
-                seen.add(user_addr.lower())
-                users_list.append(get_user(user_addr))
-    except Exception:
-        pass
+    # Include all UserRegistered event addresses
+    for ev in reg_events:
+        user_addr = ev["args"]["user"]
+        addr_low = user_addr.lower()
+        if addr_low not in seen:
+            seen.add(addr_low)
+            u_info = get_user(user_addr)
+            reg_meta = reg_events_by_addr.get(addr_low, {})
+            u_info["registration_tx_hash"] = reg_meta.get("tx_hash", "")
+            u_info["registration_block"] = reg_meta.get("block_number")
+            u_info["registered_at"] = reg_meta.get("timestamp", 0)
+            u_info["status_events"] = status_events_by_addr.get(addr_low, [])
+            users_list.append(u_info)
+
+    # Resolve upstream manufacturer & distributor names for readability
+    name_by_addr = {u["address"].lower(): u["name"] for u in users_list if u.get("address")}
+    for u in users_list:
+        m_addr = (u.get("manufacturer") or "").lower()
+        d_addr = (u.get("distributor") or "").lower()
+        u["manufacturer_name"] = name_by_addr.get(m_addr, "") if m_addr and m_addr != ZERO_ADDRESS else ""
+        u["distributor_name"] = name_by_addr.get(d_addr, "") if d_addr and d_addr != ZERO_ADDRESS else ""
 
     return users_list
 
@@ -354,17 +448,29 @@ def _fund_account(target_address: str, amount_eth: float = 1.0) -> None:
     w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
 
 
-def register_user(role_val, name: str, linked_mfr: str = "", linked_dist: str = "", private_key: str = None) -> str:
-    """Register an organization user on-chain."""
+def register_user_with_details(
+    role_val,
+    name: str,
+    linked_mfr: str = "",
+    linked_dist: str = "",
+    private_key: str = None,
+) -> dict:
+    """Register an organization user on-chain and return full tx + address details."""
     if isinstance(role_val, str):
-        role_num = ROLE_MAP.get(role_val.lower().strip(), 0)
+        r_clean = role_val.lower().strip()
+        if r_clean == "admin":
+            raise PermissionError("Public registration for Admin role is not allowed.")
+        role_num = ROLE_MAP.get(r_clean, 0)
     else:
         role_num = int(role_val)
+        if role_num == 1:
+            raise PermissionError("Public registration for Admin role is not allowed.")
 
     if role_num not in (2, 3, 4):
         raise ValueError("Role must be Manufacturer (2), Distributor (3), or Pharmacy (4)")
 
     contract = _get_contract()
+    generated_new_key = False
 
     if private_key:
         key = private_key
@@ -376,6 +482,9 @@ def register_user(role_val, name: str, linked_mfr: str = "", linked_dist: str = 
             new_acct = w3.eth.account.create()
             _fund_account(new_acct.address, 1.0)
             key = new_acct.key.hex()
+            generated_new_key = True
+
+    signer_address = w3.eth.account.from_key(key).address
 
     if role_num == 3 and (not linked_mfr or linked_mfr == ZERO_ADDRESS):
         linked_mfr = w3.eth.account.from_key(DEFAULT_MFR_KEY).address
@@ -391,23 +500,45 @@ def register_user(role_val, name: str, linked_mfr: str = "", linked_dist: str = 
         mfr_addr,
         dist_addr,
     )
-    return _send_tx(call, key)
+    tx_hash = _send_tx(call, key)
+    meta = get_tx_meta(tx_hash)
+    return {
+        "tx_hash": tx_hash,
+        "address": signer_address,
+        "private_key": key if generated_new_key or private_key else None,
+        "block_number": meta.get("block_number"),
+        "timestamp": meta.get("timestamp"),
+        "linked_manufacturer": mfr_addr,
+        "linked_distributor": dist_addr,
+    }
 
 
-def approve_user(target_address: str, signer_role: str = "admin") -> str:
+def register_user(role_val, name: str, linked_mfr: str = "", linked_dist: str = "", private_key: str = None) -> str:
+    """Register an organization user on-chain and return the transaction hash."""
+    res = register_user_with_details(
+        role_val,
+        name,
+        linked_mfr=linked_mfr,
+        linked_dist=linked_dist,
+        private_key=private_key,
+    )
+    return res["tx_hash"]
+
+
+def approve_user(target_address: str, signer_role: str = "admin", private_key: str = None) -> str:
     """Approve a pending organization user."""
     contract = _get_contract()
     target_chk = Web3.to_checksum_address(target_address)
-    key = get_key_for_role(signer_role)
+    key = private_key or get_key_for_role(signer_role)
     call = contract.functions.approve(target_chk)
     return _send_tx(call, key)
 
 
-def reject_user(target_address: str, signer_role: str = "admin") -> str:
+def reject_user(target_address: str, signer_role: str = "admin", private_key: str = None) -> str:
     """Reject a pending organization user."""
     contract = _get_contract()
     target_chk = Web3.to_checksum_address(target_address)
-    key = get_key_for_role(signer_role)
+    key = private_key or get_key_for_role(signer_role)
     call = contract.functions.reject(target_chk)
     return _send_tx(call, key)
 
@@ -474,3 +605,217 @@ def recall_medicine(medicine_id: str, reason: str, signer_role: str = "manufactu
         reason.strip() or "Quality recall initiated",
     )
     return _send_tx(call, key)
+
+
+def _resolve_org_name(address: str) -> str:
+    if not address or address == ZERO_ADDRESS:
+        return ""
+    try:
+        u = get_user(address)
+        return u.get("name") or address
+    except Exception:
+        return address
+
+
+def read_audit_trail(medicine_id: str) -> dict:
+    """Build a complete, factual on-chain audit trail and 4-stage journey timeline for a medicine."""
+    contract = _get_contract()
+    record = read_record(medicine_id)
+    if not record:
+        return {"events": [], "journey": []}
+
+    stages = read_stages(medicine_id)
+    raw = record.get("raw", {})
+    current_stage = int(record.get("stage", 1))
+    mfr_addr = record.get("manufacturer", ZERO_ADDRESS)
+    dist_addr = record.get("distributor", ZERO_ADDRESS)
+    pharm_addr = record.get("pharmacy", ZERO_ADDRESS)
+    reg_ts = int(raw.get("registeredAt") or 0)
+
+    mfr_name = _resolve_org_name(mfr_addr)
+    dist_name = _resolve_org_name(dist_addr)
+    pharm_name = _resolve_org_name(pharm_addr)
+
+    reg_ev_meta = {}
+    dist_ev_meta = {}
+    pharm_ev_meta = {}
+    recall_ev_meta = {}
+    events_list = []
+
+    try:
+        for ev in contract.events.MedicineRegistered.get_logs(from_block=0, to_block="latest"):
+            if ev["args"].get("id") == medicine_id:
+                blk = int(ev["blockNumber"])
+                tx_h = ev["transactionHash"].hex()
+                try:
+                    ts = int(w3.eth.get_block(blk)["timestamp"])
+                except Exception:
+                    ts = reg_ts
+                reg_ev_meta = {"tx_hash": tx_h, "block_number": blk, "timestamp": ts}
+                events_list.append({
+                    "event": "MedicineRegistered",
+                    "stage": 1,
+                    "actor": mfr_addr,
+                    "actor_name": mfr_name,
+                    "transaction_hash": tx_h,
+                    "block_number": blk,
+                    "timestamp": ts,
+                    "confirmation_status": "Confirmed",
+                    "is_on_chain": True,
+                })
+    except Exception:
+        pass
+
+    try:
+        for ev in contract.events.DistributorReceived.get_logs(from_block=0, to_block="latest"):
+            if ev["args"].get("id") == medicine_id:
+                blk = int(ev["blockNumber"])
+                tx_h = ev["transactionHash"].hex()
+                try:
+                    ts = int(w3.eth.get_block(blk)["timestamp"])
+                except Exception:
+                    ts = int(stages["distributor"].get("timestamp") or 0)
+                dist_ev_meta = {"tx_hash": tx_h, "block_number": blk, "timestamp": ts}
+                events_list.append({
+                    "event": "DistributorReceived",
+                    "stage": 2,
+                    "actor": dist_addr,
+                    "actor_name": dist_name,
+                    "transaction_hash": tx_h,
+                    "block_number": blk,
+                    "timestamp": ts,
+                    "details": stages["distributor"].get("details", ""),
+                    "confirmation_status": "Confirmed",
+                    "is_on_chain": True,
+                })
+    except Exception:
+        pass
+
+    try:
+        for ev in contract.events.PharmacyReceived.get_logs(from_block=0, to_block="latest"):
+            if ev["args"].get("id") == medicine_id:
+                blk = int(ev["blockNumber"])
+                tx_h = ev["transactionHash"].hex()
+                try:
+                    ts = int(w3.eth.get_block(blk)["timestamp"])
+                except Exception:
+                    ts = int(stages["pharmacy"].get("timestamp") or 0)
+                pharm_ev_meta = {"tx_hash": tx_h, "block_number": blk, "timestamp": ts}
+                events_list.append({
+                    "event": "PharmacyReceived",
+                    "stage": 3,
+                    "actor": pharm_addr,
+                    "actor_name": pharm_name,
+                    "transaction_hash": tx_h,
+                    "block_number": blk,
+                    "timestamp": ts,
+                    "details": stages["pharmacy"].get("details", ""),
+                    "confirmation_status": "Confirmed",
+                    "is_on_chain": True,
+                })
+    except Exception:
+        pass
+
+    if record.get("recalled"):
+        try:
+            for ev in contract.events.MedicineRecalled.get_logs(from_block=0, to_block="latest"):
+                if ev["args"].get("id") == medicine_id:
+                    blk = int(ev["blockNumber"])
+                    tx_h = ev["transactionHash"].hex()
+                    by_addr = str(ev["args"].get("by", ""))
+                    reason_str = str(ev["args"].get("reason", record.get("recall_reason", "")))
+                    try:
+                        ts = int(w3.eth.get_block(blk)["timestamp"])
+                    except Exception:
+                        ts = 0
+                    recall_ev_meta = {
+                        "tx_hash": tx_h,
+                        "block_number": blk,
+                        "timestamp": ts,
+                        "by": by_addr,
+                        "by_name": _resolve_org_name(by_addr),
+                        "reason": reason_str,
+                    }
+                    events_list.append({
+                        "event": "MedicineRecalled",
+                        "actor": by_addr,
+                        "actor_name": _resolve_org_name(by_addr),
+                        "transaction_hash": tx_h,
+                        "block_number": blk,
+                        "timestamp": ts,
+                        "details": reason_str,
+                        "confirmation_status": "Confirmed",
+                        "is_on_chain": True,
+                    })
+        except Exception:
+            pass
+
+    journey = [
+        {
+            "stage": 1,
+            "title": "Manufacturer Registration",
+            "organization": mfr_name or "Registered Manufacturer",
+            "actor_address": mfr_addr,
+            "completed": True,
+            "status": "Confirmed on-chain",
+            "is_on_chain": True,
+            "event_name": "MedicineRegistered",
+            "timestamp": reg_ev_meta.get("timestamp") or reg_ts,
+            "transaction_hash": reg_ev_meta.get("tx_hash", ""),
+            "block_number": reg_ev_meta.get("block_number"),
+            "details": f"Batch {record.get('batch')} ({record.get('quantity')} units) registered with IPFS reference CID {record.get('ipfs_cid')}.",
+        },
+        {
+            "stage": 2,
+            "title": "Distributor Receipt & Custody",
+            "organization": dist_name if current_stage >= 2 else "Awaiting Authorized Distributor",
+            "actor_address": dist_addr if current_stage >= 2 else "",
+            "completed": current_stage >= 2,
+            "status": "Confirmed on-chain" if current_stage >= 2 else "Pending distributor receipt",
+            "is_on_chain": current_stage >= 2,
+            "event_name": "DistributorReceived" if current_stage >= 2 else "",
+            "timestamp": dist_ev_meta.get("timestamp") or int(stages["distributor"].get("timestamp") or 0),
+            "transaction_hash": dist_ev_meta.get("tx_hash", ""),
+            "block_number": dist_ev_meta.get("block_number"),
+            "details": stages["distributor"].get("details") if current_stage >= 2 else "Batch has not yet been received by a distributor.",
+        },
+        {
+            "stage": 3,
+            "title": "Pharmacy Receipt & Retail Stock",
+            "organization": pharm_name if current_stage >= 3 else "Awaiting Authorized Pharmacy",
+            "actor_address": pharm_addr if current_stage >= 3 else "",
+            "completed": current_stage >= 3,
+            "status": "Confirmed on-chain" if current_stage >= 3 else "Pending pharmacy receipt",
+            "is_on_chain": current_stage >= 3,
+            "event_name": "PharmacyReceived" if current_stage >= 3 else "",
+            "timestamp": pharm_ev_meta.get("timestamp") or int(stages["pharmacy"].get("timestamp") or 0),
+            "transaction_hash": pharm_ev_meta.get("tx_hash", ""),
+            "block_number": pharm_ev_meta.get("block_number"),
+            "details": stages["pharmacy"].get("details") if current_stage >= 3 else "Batch has not yet been received by a retail pharmacy.",
+        },
+        {
+            "stage": 4,
+            "title": "Consumer Verification",
+            "organization": "Public Consumer Verification",
+            "actor_address": "",
+            "completed": True,
+            "status": "Read-only query & off-chain analysis",
+            "is_on_chain": False,
+            "event_name": "VerificationQuery",
+            "timestamp": 0,
+            "transaction_hash": "",
+            "block_number": None,
+            "details": "On-chain provenance inspected. Upload physical packaging photo to perform off-chain OCR and visual similarity analysis.",
+        },
+    ]
+
+    return {
+        "events": events_list,
+        "journey": journey,
+        "recall_event": recall_ev_meta if record.get("recalled") else None,
+        "organizations": {
+            "manufacturer_name": mfr_name,
+            "distributor_name": dist_name,
+            "pharmacy_name": pharm_name,
+        },
+    }

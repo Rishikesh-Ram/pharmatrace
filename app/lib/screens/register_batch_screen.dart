@@ -1,7 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 
 class MockRegistry {
   static final List<Map<String, String>> batches = [];
@@ -22,9 +26,12 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
   final _qty = TextEditingController(text: '100');
 
   XFile? _selectedImage;
+  Uint8List? _selectedImageBytes;
   bool _loading = false;
   String? _registeredId;
   String? _txHash;
+  String? _blockNumber;
+  String? _confirmationStatus;
   String? _imageCid;
   String? _errorMessage;
 
@@ -52,8 +59,11 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
     final picker = ImagePicker();
     final picked = await picker.pickImage(source: ImageSource.gallery);
     if (picked != null) {
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
       setState(() {
         _selectedImage = picked;
+        _selectedImageBytes = bytes;
       });
     }
   }
@@ -61,11 +71,10 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
   Future<void> _register() async {
     if (!_form.currentState!.validate()) return;
 
-    if (_selectedImage == null) {
+    if (_selectedImage == null || _selectedImageBytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please upload a reference packaging photo for IPFS.'),
-          backgroundColor: Colors.orange,
+          content: Text('Please select a reference package photo.'),
         ),
       );
       return;
@@ -77,7 +86,6 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
     });
 
     try {
-      final imageBytes = await _selectedImage!.readAsBytes();
       final batchId = _batch.text.trim().toUpperCase();
 
       final response = await api.registerMedicine(
@@ -86,11 +94,10 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
         batch: batchId,
         expiry: _exp.text.trim(),
         quantity: int.tryParse(_qty.text.trim()) ?? 100,
-        imageBytes: imageBytes,
+        imageBytes: _selectedImageBytes!,
         filename: _selectedImage!.name,
       );
 
-      // Keep MockRegistry updated for backwards compatibility
       MockRegistry.batches.add({
         'drug': _drug.text.trim(),
         'batchId': batchId,
@@ -104,6 +111,9 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
         _loading = false;
         _registeredId = batchId;
         _txHash = response['transaction_hash']?.toString();
+        _blockNumber = response['block_number']?.toString();
+        _confirmationStatus = (response['confirmation_status'] ?? 'Confirmed')
+            .toString();
         _imageCid = response['image_cid']?.toString();
       });
     } catch (e) {
@@ -123,8 +133,11 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
     _qty.text = '100';
     setState(() {
       _selectedImage = null;
+      _selectedImageBytes = null;
       _registeredId = null;
       _txHash = null;
+      _blockNumber = null;
+      _confirmationStatus = null;
       _imageCid = null;
       _errorMessage = null;
     });
@@ -134,26 +147,26 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
       (v == null || v.trim().isEmpty) ? 'Required' : null;
 
   Widget _dateField(String label, TextEditingController c) => TextFormField(
-        controller: c,
-        readOnly: true,
-        validator: _req,
-        onTap: () => _pickDate(c),
-        decoration: InputDecoration(
-          labelText: label,
-          border: const OutlineInputBorder(),
-          suffixIcon: const Icon(Icons.calendar_today),
-        ),
-      );
+    controller: c,
+    readOnly: true,
+    validator: _req,
+    onTap: () => _pickDate(c),
+    decoration: InputDecoration(
+      labelText: label,
+      suffixIcon: const Icon(Icons.calendar_today_outlined, size: 18),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppColors.surface,
       appBar: AppBar(title: const Text('Register Medicine Batch')),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
+          constraints: const BoxConstraints(maxWidth: 540),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
             child: _registeredId == null ? _formView() : _successView(),
           ),
         ),
@@ -161,184 +174,245 @@ class _RegisterBatchScreenState extends State<RegisterBatchScreen> {
     );
   }
 
-  Widget _formView() => Form(
+  Widget _formView() => Material(
+    color: Colors.white,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(24),
+      side: const BorderSide(color: AppColors.hairline),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Form(
         key: _form,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            const Text(
+              'New Batch Registration',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: AppColors.ink,
+                letterSpacing: -0.4,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Record batch details on-chain and pin the reference package image.',
+              style: TextStyle(fontSize: 13.5, color: AppColors.muted),
+            ),
+            const SizedBox(height: 22),
             if (_errorMessage != null)
               Container(
                 margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.shade200),
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(14),
                 ),
                 child: Text(
                   _errorMessage!,
-                  style: TextStyle(color: Colors.red.shade800),
+                  style: const TextStyle(
+                    color: Color(0xFF991B1B),
+                    fontSize: 13,
+                  ),
                 ),
               ),
             TextFormField(
               controller: _drug,
               validator: _req,
               decoration: const InputDecoration(
-                labelText: 'Medicine name',
+                labelText: 'Medicine Name',
                 hintText: 'e.g. Paracetamol 500mg',
-                border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 14),
-            TextFormField(
-              controller: _batch,
-              validator: _req,
-              decoration: const InputDecoration(
-                labelText: 'Batch / Medicine ID',
-                hintText: 'e.g. PT-DEMO-001',
-                border: OutlineInputBorder(),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: TextFormField(
+                    controller: _batch,
+                    validator: _req,
+                    decoration: const InputDecoration(
+                      labelText: 'Batch ID',
+                      hintText: 'e.g. PT-DEMO-001',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _qty,
+                    keyboardType: TextInputType.number,
+                    validator: _req,
+                    decoration: const InputDecoration(labelText: 'Units'),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 14),
-            TextFormField(
-              controller: _qty,
-              keyboardType: TextInputType.number,
-              validator: _req,
-              decoration: const InputDecoration(
-                labelText: 'Quantity / Units',
-                hintText: 'e.g. 100',
-                border: OutlineInputBorder(),
-              ),
+            Row(
+              children: [
+                Expanded(child: _dateField('Mfg Date', _mfg)),
+                const SizedBox(width: 12),
+                Expanded(child: _dateField('Expiry Date', _exp)),
+              ],
             ),
-            const SizedBox(height: 14),
-            _dateField('Manufacture date', _mfg),
-            const SizedBox(height: 14),
-            _dateField('Expiry date (YYYY-MM-DD)', _exp),
             const SizedBox(height: 18),
-            Card(
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-                side: BorderSide(color: Colors.grey.shade300),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.hairline),
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Reference Package Photo (IPFS)',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'This image will be stored on Pinata IPFS as the reference baseline for counterfeit detection.',
-                      style: TextStyle(fontSize: 12, color: Colors.black54),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: _loading ? null : _pickImage,
-                          icon: const Icon(Icons.add_a_photo_outlined),
-                          label: Text(
-                            _selectedImage == null ? 'Select photo' : 'Change photo',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.image_outlined,
+                        color: AppColors.tealDark,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _selectedImage == null
+                              ? 'Reference Package Photo'
+                              : _selectedImage!.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.ink,
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            _selectedImage == null
-                                ? 'No file chosen'
-                                : _selectedImage!.name,
-                            style: const TextStyle(fontSize: 12),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                      ),
+                      TextButton(
+                        onPressed: _loading ? null : _pickImage,
+                        child: Text(
+                          _selectedImage == null ? 'Choose File' : 'Replace',
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                  if (_selectedImageBytes != null) ...[
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.memory(
+                        _selectedImageBytes!,
+                        height: 120,
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ],
-                ),
+                ],
               ),
             ),
             const SizedBox(height: 24),
             SizedBox(
-              height: 50,
+              height: 52,
               child: FilledButton(
                 onPressed: _loading ? null : _register,
                 child: _loading
                     ? const SizedBox(
-                        width: 22,
-                        height: 22,
+                        width: 20,
+                        height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           color: Colors.white,
                         ),
                       )
-                    : const Text(
-                        'Register on Blockchain & Pin to IPFS',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
+                    : const Text('Register Batch'),
               ),
             ),
           ],
         ),
-      );
+      ),
+    ),
+  );
 
-  Widget _successView() => Column(
+  Widget _successView() => Material(
+    color: Colors.white,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(24),
+      side: const BorderSide(color: AppColors.hairline),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
         children: [
-          const Icon(Icons.check_circle, color: Colors.green, size: 56),
+          const Icon(
+            Icons.check_circle_rounded,
+            color: AppColors.tealDark,
+            size: 52,
+          ),
           const SizedBox(height: 12),
           Text(
-            'Batch $_registeredId Registered!',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Successfully written to blockchain and pinned to IPFS.',
-            style: TextStyle(color: Colors.black54),
+            'Batch $_registeredId Registered',
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              color: AppColors.ink,
+            ),
           ),
           const SizedBox(height: 20),
           Container(
-            color: Colors.white,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(12),
+              color: Colors.white,
+              border: Border.all(color: AppColors.hairline),
+              borderRadius: BorderRadius.circular(18),
             ),
-            child: QrImageView(data: _registeredId!, size: 200),
+            child: QrImageView(data: _registeredId!, size: 180),
           ),
-          const SizedBox(height: 12),
-          Text(
-            _registeredId!,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          const SizedBox(height: 18),
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text(
+                'Blockchain & IPFS Receipt',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.muted,
+                ),
+              ),
+              children: [
+                if (_imageCid != null)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('IPFS CID'),
+                    subtitle: SelectableText(_imageCid!),
+                  ),
+                if (_txHash != null)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Transaction (${_confirmationStatus ?? "Confirmed"}${_blockNumber != null ? " • Block #$_blockNumber" : ""})',
+                    ),
+                    subtitle: SelectableText(_txHash!),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
-          if (_imageCid != null)
-            Card(
-              child: ListTile(
-                dense: true,
-                leading: const Icon(Icons.cloud_done, color: Colors.teal),
-                title: const Text('IPFS CID'),
-                subtitle: Text(_imageCid!),
-              ),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _reset,
+              child: const Text('Register Another Batch'),
             ),
-          if (_txHash != null)
-            Card(
-              child: ListTile(
-                dense: true,
-                leading: const Icon(Icons.receipt_long, color: Colors.teal),
-                title: const Text('Transaction Hash'),
-                subtitle: Text(_txHash!),
-              ),
-            ),
-          const SizedBox(height: 24),
-          OutlinedButton(
-            onPressed: _reset,
-            child: const Text('Register Another Batch'),
           ),
         ],
-      );
+      ),
+    ),
+  );
 }

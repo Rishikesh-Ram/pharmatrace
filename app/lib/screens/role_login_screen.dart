@@ -2,328 +2,444 @@ import 'package:flutter/material.dart';
 
 import '../models/user_role.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import 'organization_registration_screen.dart';
 import 'role_dashboard_screen.dart';
 
 class RoleLoginScreen extends StatefulWidget {
-  const RoleLoginScreen({super.key});
+  final UserRole? initialRole;
+
+  const RoleLoginScreen({super.key, this.initialRole});
 
   @override
   State<RoleLoginScreen> createState() => _RoleLoginScreenState();
 }
 
 class _RoleLoginScreenState extends State<RoleLoginScreen> {
-  UserRole _selectedRole = UserRole.consumer;
+  final _formKey = GlobalKey<FormState>();
+  final _identifierCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
 
-  static const Color teal = Color(0xFF008577);
+  late UserRole _selectedRole;
+  bool _obscurePassword = true;
+  bool _loading = false;
 
-  IconData _roleIcon(UserRole role) {
-    switch (role) {
-      case UserRole.consumer:
-        return Icons.person_outline;
-      case UserRole.manufacturer:
-        return Icons.factory_outlined;
-      case UserRole.distributor:
-        return Icons.local_shipping_outlined;
-      case UserRole.pharmacy:
-        return Icons.local_pharmacy_outlined;
-      case UserRole.admin:
-        return Icons.admin_panel_settings_outlined;
+  String? _errorTitle;
+  String? _errorMessage;
+  String? _errorCode;
+
+  static const List<UserRole> _orgRoles = [
+    UserRole.manufacturer,
+    UserRole.distributor,
+    UserRole.pharmacy,
+    UserRole.admin,
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final init = widget.initialRole;
+    _selectedRole = (init == null || init == UserRole.consumer)
+        ? UserRole.manufacturer
+        : init;
+  }
+
+  @override
+  void didUpdateWidget(covariant RoleLoginScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialRole != null &&
+        widget.initialRole != oldWidget.initialRole &&
+        widget.initialRole != UserRole.consumer) {
+      _selectedRole = widget.initialRole!;
     }
   }
 
-  String _roleAddress(UserRole role) {
+  @override
+  void dispose() {
+    _identifierCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  Map<String, String> _demoCredentialsForRole(UserRole role) {
     switch (role) {
       case UserRole.admin:
-        return '0xf39Fd6...2266 (Admin Account)';
+        return {
+          'email': 'admin@pharmatrace.local',
+          'password': 'Admin@123',
+          'org': 'PharmaTrace Regulatory Authority',
+        };
       case UserRole.manufacturer:
-        return '0x709979...79C8 (Active Manufacturer)';
+        return {
+          'email': 'manufacturer@elnova.local',
+          'password': 'Mfr@123',
+          'org': 'Elnova Pharmaceuticals',
+        };
       case UserRole.distributor:
-        return '0x3C44Cd...93BC (Active Distributor)';
+        return {
+          'email': 'distributor@medline.local',
+          'password': 'Dist@123',
+          'org': 'MedLine National Logistics',
+        };
       case UserRole.pharmacy:
-        return '0x90F79b...b906 (Active Pharmacy)';
+        return {
+          'email': 'pharmacy@apollocare.local',
+          'password': 'Pharm@123',
+          'org': 'Apollo Care Pharmacy',
+        };
       case UserRole.consumer:
-        return 'Public Consumer (No Wallet Needed)';
+        return {'email': '', 'password': '', 'org': ''};
     }
   }
 
-  void _continue() {
+  void _autofillDemoCredentials() {
+    final creds = _demoCredentialsForRole(_selectedRole);
+    setState(() {
+      _identifierCtrl.text = creds['email'] ?? '';
+      _passwordCtrl.text = creds['password'] ?? '';
+      _errorMessage = null;
+      _errorTitle = null;
+      _errorCode = null;
+    });
+  }
+
+  Future<void> _submitLogin() async {
+    if (_loading) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+      _errorTitle = null;
+      _errorCode = null;
+    });
+
+    try {
+      await api.login(
+        identifier: _identifierCtrl.text.trim(),
+        password: _passwordCtrl.text,
+        expectedRole: _selectedRole.name,
+      );
+
+      if (!mounted) return;
+      setState(() => _loading = false);
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => RoleDashboardScreen(role: _selectedRole),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      String title = 'Sign-In Failed';
+      if (e.code == 'PENDING_APPROVAL') {
+        title = 'Account Pending Approval';
+      } else if (e.code == 'REGISTRATION_REJECTED') {
+        title = 'Registration Rejected';
+      } else if (e.code == 'ROLE_MISMATCH') {
+        title = 'Role Mismatch';
+      } else if (e.code == 'INVALID_CREDENTIALS') {
+        title = 'Invalid Credentials';
+      }
+      setState(() {
+        _loading = false;
+        _errorTitle = title;
+        _errorMessage = e.message;
+        _errorCode = e.code;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _errorTitle = 'Service Unreachable';
+        _errorMessage = 'Could not connect to the PharmaTrace server. Verify the backend is running on port 5001.';
+        _errorCode = 'NETWORK_ERROR';
+      });
+    }
+  }
+
+  void _openOrganizationRegistration() {
+    if (_selectedRole == UserRole.admin) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => RoleDashboardScreen(role: _selectedRole),
-      ),
-    );
-  }
-
-  void _openRegisterDialog() {
-    final nameCtrl = TextEditingController();
-    String selectedRole = 'distributor';
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Register New Organization'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Organization Name',
-                  hintText: 'e.g. Apex Health Logistics',
-                ),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: selectedRole,
-                items: const [
-                  DropdownMenuItem(value: 'manufacturer', child: Text('Manufacturer')),
-                  DropdownMenuItem(value: 'distributor', child: Text('Distributor')),
-                  DropdownMenuItem(value: 'pharmacy', child: Text('Pharmacy')),
-                ],
-                onChanged: (v) => setDialogState(() => selectedRole = v ?? 'distributor'),
-                decoration: const InputDecoration(labelText: 'Role'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final name = nameCtrl.text.trim();
-                if (name.isEmpty) return;
-                Navigator.pop(ctx);
-                try {
-                  await api.registerUser(role: selectedRole, name: name);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Registration submitted for $name. Pending Admin approval.')),
-                    );
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Registration failed: $e')),
-                    );
-                  }
-                }
-              },
-              child: const Text('Register on Blockchain'),
-            ),
-          ],
-        ),
+        builder: (_) =>
+            OrganizationRegistrationScreen(preselectedRole: _selectedRole),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final isAdmin = _selectedRole == UserRole.admin;
+    final demoCreds = _demoCredentialsForRole(_selectedRole);
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF5FAF9),
+      backgroundColor: AppColors.surface,
+      appBar: AppBar(title: Text('${_selectedRole.title} Sign In')),
       body: SafeArea(
         child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 580),
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              shrinkWrap: true,
-              children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: teal,
-                    borderRadius: BorderRadius.circular(22),
-                  ),
-                  child: const Icon(
-                    Icons.health_and_safety_outlined,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Material(
                     color: Colors.white,
-                    size: 38,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'PharmaTrace',
-                  style: TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF173C38),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Blockchain Medicine Traceability & Counterfeit Packaging Detection',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.black54,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'Continue as',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Select a participant account to manage on-chain supply-chain operations.',
-                  style: TextStyle(color: Colors.black54, fontSize: 13),
-                ),
-                const SizedBox(height: 16),
-                ...UserRole.values.map((role) {
-                  final selected = role == _selectedRole;
-
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Material(
-                      color: selected
-                          ? const Color(0xFFE0F2F1)
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(16),
-                        onTap: () {
-                          setState(() => _selectedRole = role);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: selected
-                                  ? teal
-                                  : const Color(0xFFE0E8E6),
-                              width: selected ? 2 : 1,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      side: const BorderSide(color: AppColors.hairline),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Sign in as ${_selectedRole.title}',
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.ink,
+                                letterSpacing: -0.5,
+                              ),
                             ),
-                          ),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                backgroundColor: selected
-                                    ? teal
-                                    : const Color(0xFFF0FDF4),
-                                child: Icon(
-                                  _roleIcon(role),
-                                  color: selected ? Colors.white : teal,
-                                  size: 22,
-                                ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Enter your organization credentials to continue.',
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                color: AppColors.muted,
                               ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Text(
-                                          role.title,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 15,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFFDCFCE7),
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: Text(
-                                            role == UserRole.consumer ? 'Public' : 'Active Account',
-                                            style: const TextStyle(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                              color: Color(0xFF15803D),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      role.description,
-                                      style: const TextStyle(
-                                        color: Colors.black54,
+                            ),
+                            const SizedBox(height: 18),
+                            // Compact role switcher pills
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: _orgRoles.map((r) {
+                                  final selected = r == _selectedRole;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: ChoiceChip(
+                                      label: Text(r.title),
+                                      selected: selected,
+                                      selectedColor: AppColors.mintSoft,
+                                      labelStyle: TextStyle(
                                         fontSize: 12,
+                                        fontWeight: selected
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                        color: AppColors.ink,
                                       ),
+                                      onSelected: _loading
+                                          ? null
+                                          : (_) {
+                                              setState(() {
+                                                _selectedRole = r;
+                                                _errorMessage = null;
+                                                _errorTitle = null;
+                                              });
+                                            },
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      _roleAddress(role),
-                                      style: const TextStyle(
-                                        color: Colors.black45,
-                                        fontSize: 11,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                  ],
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            if (_errorMessage != null) _buildErrorBanner(),
+                            TextFormField(
+                              controller: _identifierCtrl,
+                              enabled: !_loading,
+                              keyboardType: TextInputType.emailAddress,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Username or Email',
+                                prefixIcon: Icon(
+                                  Icons.person_outline,
+                                  size: 20,
                                 ),
                               ),
-                              if (selected)
-                                const Icon(
-                                  Icons.check_circle,
-                                  color: teal,
+                              validator: (v) {
+                                if (v == null || v.trim().isEmpty) {
+                                  return 'Enter your username or email.';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 14),
+                            TextFormField(
+                              controller: _passwordCtrl,
+                              enabled: !_loading,
+                              obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.done,
+                              onFieldSubmitted: (_) => _submitLogin(),
+                              decoration: InputDecoration(
+                                labelText: 'Password',
+                                prefixIcon: const Icon(
+                                  Icons.lock_outline,
+                                  size: 20,
                                 ),
-                            ],
-                          ),
+                                suffixIcon: IconButton(
+                                  onPressed: () {
+                                    setState(
+                                      () =>
+                                          _obscurePassword = !_obscurePassword,
+                                    );
+                                  },
+                                  icon: Icon(
+                                    _obscurePassword
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
+                              validator: (v) {
+                                if (v == null || v.isEmpty) {
+                                  return 'Enter your password.';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 22),
+                            SizedBox(
+                              height: 50,
+                              child: FilledButton(
+                                onPressed: _loading ? null : _submitLogin,
+                                child: _loading
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text('Sign In'),
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                            const Divider(),
+                            const SizedBox(height: 8),
+                            if (!isAdmin)
+                              Center(
+                                child: TextButton(
+                                  onPressed: _loading
+                                      ? null
+                                      : _openOrganizationRegistration,
+                                  child: const Text(
+                                    'New to PharmaTrace? Register your organization.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.tealDark,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 6),
+                                child: Text(
+                                  'Public registration is disabled for Admin.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
-                  );
-                }),
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 50,
-                  child: FilledButton(
-                    onPressed: _continue,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: teal,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                  ),
+                  const SizedBox(height: 14),
+                  // Compact Dev Autofill bar
+                  Material(
+                    color: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(color: AppColors.hairline),
                     ),
-                    child: Text(
-                      'Continue as ${_selectedRole.title}',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.bolt_rounded,
+                            color: AppColors.tealDark,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Demo: ${demoCreds['org']}',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _loading
+                                ? null
+                                : _autofillDemoCredentials,
+                            child: const Text(
+                              'Autofill',
+                              style: TextStyle(fontSize: 12.5),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  height: 46,
-                  child: OutlinedButton.icon(
-                    onPressed: _openRegisterDialog,
-                    icon: const Icon(Icons.add_business_outlined, size: 20),
-                    label: const Text('Register New Organization'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: teal,
-                      side: const BorderSide(color: teal),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Connected to Hardhat Local Blockchain (RPC: 8545 • Chain ID: 31337)',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 11, color: Colors.black45),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildErrorBanner() {
+    final isPending = _errorCode == 'PENDING_APPROVAL';
+    final bg = isPending ? const Color(0xFFFFFBEB) : const Color(0xFFFEF2F2);
+    final fg = isPending ? const Color(0xFF92400E) : const Color(0xFF991B1B);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _errorTitle ?? 'Sign-In Error',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13.5,
+              color: fg,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _errorMessage!,
+            style: TextStyle(fontSize: 12.5, color: fg, height: 1.35),
+          ),
+        ],
       ),
     );
   }

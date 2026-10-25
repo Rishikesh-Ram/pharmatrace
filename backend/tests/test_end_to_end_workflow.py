@@ -1,12 +1,15 @@
 """PharmaTrace End-to-End Workflow & Verification Test Suite.
 Tests the entire lifecycle:
 1. Organization Registration & Approvals (Admin -> Manufacturer -> Distributor -> Pharmacy)
-2. Manufacturer Medicine Registration (Stage 1) & /api/batches?stage=1
-3. Distributor Medicine Verification & Receipt (Stage 1 -> 2) & /api/batches?stage=2
-4. Pharmacy Medicine Verification & Receipt (Stage 2 -> 3) & /api/batches?stage=3
-5. Multi-factor Packaging Verification (/verify) & Lookup (/lookup)
-6. Authentic vs Mismatch vs Counterfeit Distinction
-7. On-chain Medicine Recall (/api/recall) & Recall Enforcement
+2. Role-Specific Authentication, Pending/Rejected/Role-Mismatch Gates & Admin Signup Block
+3. New Organization On-Chain Registration (Pending -> Upstream Approvals -> Active Login)
+4. Manufacturer Medicine Registration (Stage 1) & /api/batches?stage=1
+5. Distributor Medicine Verification & Receipt (Stage 1 -> 2) & /api/batches?stage=2
+6. Pharmacy Medicine Verification & Receipt (Stage 2 -> 3) & /api/batches?stage=3
+7. 4-Stage Journey Timeline, Blockchain Audit Trail & Reference Image Serving
+8. Multi-factor Packaging Verification (/verify) with Explainable Verdicts
+9. Counterfeit / Unregistered ID Detection
+10. On-chain Medicine Recall (/api/recall) & Recall Enforcement
 """
 import io
 import os
@@ -109,15 +112,83 @@ def run_e2e_test():
     assert blockchain.get_user(pharm_addr)["status"] == 1, "Pharmacy must be Active"
     print("[PASS] 5. Pharmacy is active and approved by Admin + Manufacturer + Distributor.")
 
-    # 6. Verify User Registry endpoint reflects all active roles
+    # 6. Verify Role-Specific Authentication & Public Admin Signup Block
+    res_admin_signup = client.post("/api/register-user", json={
+        "role": "admin",
+        "name": "Unauthorized Admin",
+    })
+    assert res_admin_signup.status_code == 403, "Public Admin registration must be blocked"
+
+    res_bad_pw = client.post("/api/auth/login", json={
+        "identifier": "manufacturer@elnova.local",
+        "password": "WrongPassword999",
+        "role": "manufacturer",
+    })
+    assert res_bad_pw.status_code == 401
+    assert res_bad_pw.json["code"] == "INVALID_CREDENTIALS"
+
+    res_role_mismatch = client.post("/api/auth/login", json={
+        "identifier": "manufacturer@elnova.local",
+        "password": "Mfr@123",
+        "role": "distributor",
+    })
+    assert res_role_mismatch.status_code == 403
+    assert res_role_mismatch.json["code"] == "ROLE_MISMATCH"
+
+    res_mfr_login = client.post("/api/auth/login", json={
+        "identifier": "manufacturer@elnova.local",
+        "password": "Mfr@123",
+        "role": "manufacturer",
+    })
+    assert res_mfr_login.status_code == 200, f"Mfr login failed: {res_mfr_login.json}"
+    mfr_token = res_mfr_login.json["token"]
+    assert mfr_token
+
+    # Register a new Distributor org -> verify Pending status -> verify login blocked until approved
+    ts_now = int(time.time())
+    new_org_email = f"dist.{ts_now}@testlogistics.local"
+    res_new_org = client.post("/api/register-user", json={
+        "role": "distributor",
+        "name": f"Test Logistics {ts_now}",
+        "license_number": f"DL-DIST-{ts_now}",
+        "email": new_org_email,
+        "username": f"dist_{ts_now}",
+        "password": "TestOrg@123",
+        "contact_phone": "+91-9800000001",
+        "location": "Bengaluru, IN",
+        "linked_manufacturer": mfr_addr,
+    })
+    assert res_new_org.status_code == 201, f"New org registration failed: {res_new_org.json}"
+    new_org_addr = res_new_org.json["address"]
+    assert res_new_org.json["status_name"] == "Pending"
+
+    res_pending_login = client.post("/api/auth/login", json={
+        "identifier": new_org_email,
+        "password": "TestOrg@123",
+        "role": "distributor",
+    })
+    assert res_pending_login.status_code == 403
+    assert res_pending_login.json["code"] == "PENDING_APPROVAL"
+
+    # Approve new Distributor by Admin + Manufacturer -> verify login now succeeds
+    client.post("/api/approve-user", json={"target": new_org_addr, "approver_role": "admin"})
+    client.post("/api/approve-user", json={"target": new_org_addr, "approver_role": "manufacturer"})
+    res_active_login = client.post("/api/auth/login", json={
+        "identifier": new_org_email,
+        "password": "TestOrg@123",
+        "role": "distributor",
+    })
+    assert res_active_login.status_code == 200, f"Approved org login failed: {res_active_login.json}"
+    print("[PASS] 6. Role-specific login, Pending-approval gate, and multi-party activation verified.")
+
+    # 7. Verify User Registry endpoint reflects all active roles and audit events
     res = client.get("/api/users")
     assert res.status_code == 200
     user_list = res.json["users"]
-    assert len(user_list) >= 4, f"Expected at least 4 users, found {len(user_list)}"
-    print(f"[PASS] 6. User Registry queried successfully ({len(user_list)} organizations listed).")
+    assert len(user_list) >= 5, f"Expected at least 5 users, found {len(user_list)}"
+    print(f"[PASS] 7. User Registry queried successfully ({len(user_list)} organizations listed with audit metadata).")
 
-    # 7. Register a New Medicine Batch on Blockchain (Stage 1)
-    ts_now = int(time.time())
+    # 8. Register a New Medicine Batch on Blockchain (Stage 1)
     test_med_id = f"PT-E2E-{ts_now}"
     test_batch = f"BATCH-E2E-{ts_now % 10000}"
     expiry_ts = ts_now + 365 * 24 * 3600
@@ -135,9 +206,9 @@ def run_e2e_test():
     res_s1 = client.get("/api/batches?stage=1")
     assert res_s1.status_code == 200
     assert any(b["id"] == test_med_id for b in res_s1.json["batches"])
-    print(f"[PASS] 7. Medicine registered at Stage 1 & listed in /api/batches?stage=1. Tx: {tx_hash}")
+    print(f"[PASS] 8. Medicine registered at Stage 1 & listed in /api/batches?stage=1. Tx: {tx_hash}")
 
-    # 8. Distributor Receipt (Stage 1 -> 2)
+    # 9. Distributor Receipt (Stage 1 -> 2)
     print(f"[ACTION] Distributor receiving batch {test_med_id}...")
     res = client.post("/api/distributor/receive", json={
         "medicine_id": test_med_id,
@@ -148,9 +219,9 @@ def run_e2e_test():
     res_s2 = client.get("/api/batches?stage=2")
     assert res_s2.status_code == 200
     assert any(b["id"] == test_med_id for b in res_s2.json["batches"])
-    print("[PASS] 8. Distributor receipt confirmed. Medicine advanced to Stage 2 & listed in /api/batches?stage=2.")
+    print("[PASS] 9. Distributor receipt confirmed. Medicine advanced to Stage 2 & listed in /api/batches?stage=2.")
 
-    # 9. Pharmacy Receipt (Stage 2 -> 3)
+    # 10. Pharmacy Receipt (Stage 2 -> 3)
     print(f"[ACTION] Pharmacy receiving batch {test_med_id}...")
     res = client.post("/api/pharmacy/receive", json={
         "medicine_id": test_med_id,
@@ -161,26 +232,31 @@ def run_e2e_test():
     rec = blockchain.find_record(test_med_id)
     assert rec["stage"] == 3, f"Expected stage 3, got {rec['stage']}"
     assert rec["current_owner"].lower() == pharm_addr.lower()
-    print("[PASS] 9. Pharmacy receipt confirmed. Medicine advanced to Stage 3.")
+    print("[PASS] 10. Pharmacy receipt confirmed. Medicine advanced to Stage 3.")
 
-    # 10. Consumer Lookup by Medicine ID and Batch ID
-    print("[ACTION] Testing consumer lookup by Medicine ID...")
+    # 11. Consumer Lookup, 4-Stage Journey Timeline, Audit Events & Reference Image
+    print("[ACTION] Testing consumer lookup, 4-stage journey, and reference image endpoint...")
     res_id = client.get(f"/lookup/{test_med_id}")
     assert res_id.status_code == 200
     data_id = res_id.json
     assert data_id["found"] is True
     assert data_id["stage"] == 3
-    assert len(data_id["history"]) == 3  # Registration -> Distributor -> Pharmacy
+    assert len(data_id["history"]) == 3
+    assert len(data_id["journey"]) == 4
+    assert len(data_id["events"]) >= 3
     assert "Central Hub" in data_id["stages"]["distributor"]["details"]
     assert "Apollo Retail" in data_id["stages"]["pharmacy"]["details"]
 
-    print("[ACTION] Testing consumer lookup by Batch ID...")
+    res_ref_img = client.get(f"/api/reference-image/{test_med_id}")
+    assert res_ref_img.status_code == 200
+    assert len(res_ref_img.data) > 1000
+
     res_batch = client.get(f"/lookup/{test_batch}")
     assert res_batch.status_code == 200
     assert res_batch.json["medicine_id"] == test_med_id
-    print("[PASS] 10. Consumer lookup resolved full 3-stage timeline by both ID and Batch.")
+    print("[PASS] 11. Consumer lookup resolved 4-stage journey, audit events, and reference image.")
 
-    # 11. Multi-Factor Packaging Verification (/verify)
+    # 12. Multi-Factor Packaging Verification (/verify) with Explainable Verdict
     print("[ACTION] Testing packaging verification endpoint...")
     ref_image_path = Path(__file__).resolve().parent.parent / "dataset" / "reference" / "packet_back.jpg"
     with open(ref_image_path, "rb") as f:
@@ -197,12 +273,14 @@ def run_e2e_test():
     assert res_verify.status_code == 200, f"Verification failed: {res_verify.json}"
     verdict_data = res_verify.json
     print(f"[INFO] Verification Verdict: {verdict_data.get('verdict')}")
+    print(f"[INFO] Explainable Category: {verdict_data.get('explainable', {}).get('category')}")
     print(f"[INFO] OCR Detected Batch:   {verdict_data.get('ocr', {}).get('found_batch')}")
-    print(f"[INFO] Blockchain OK:        {verdict_data.get('details', {}).get('blockchain_ok')}")
     assert verdict_data.get("verdict") in ("Verified", "Suspicious"), "Unexpected verdict"
-    print("[PASS] 11. Multi-factor verification pipeline evaluated successfully.")
+    assert "explainable" in verdict_data
+    assert len(verdict_data.get("journey", [])) == 4
+    print("[PASS] 12. Multi-factor verification pipeline & explainable verdict evaluated successfully.")
 
-    # 12. Counterfeit / Unregistered ID Detection
+    # 13. Counterfeit / Unregistered ID Detection
     print("[ACTION] Testing non-existent medicine detection...")
     res_fake = client.get("/lookup/FAKE-COUNTERFEIT-999")
     assert res_fake.status_code == 404
@@ -217,9 +295,10 @@ def run_e2e_test():
         content_type="multipart/form-data",
     )
     assert res_fake_verify.json["verdict"] == "Unverified"
-    print("[PASS] 12. Counterfeit / unregistered medicines correctly rejected as Unverified.")
+    assert res_fake_verify.json["explainable"]["category"] == "Unregistered"
+    print("[PASS] 13. Counterfeit / unregistered medicines correctly rejected as Unregistered/Unverified.")
 
-    # 13. Medicine Recall Workflow (/api/recall) & Demo Stage Seeding
+    # 14. Medicine Recall Workflow (/api/recall) & Recall Enforcement
     recall_id = f"PT-RECALL-{ts_now}"
     blockchain.register_medicine(
         medicine_id=recall_id,
@@ -238,7 +317,7 @@ def run_e2e_test():
     res_rec_lookup = client.get(f"/lookup/{recall_id}")
     assert res_rec_lookup.json["recalled"] is True
     assert "Quality control" in res_rec_lookup.json["recall_reason"]
-    print("[PASS] 13. On-chain medicine recall executed and verified.")
+    print("[PASS] 14. On-chain medicine recall executed and verified.")
 
     # Ensure demo batches exist at Stage 1, Stage 2, and Stage 3 for live dashboard queues
     if blockchain.find_record("PT-TEST-002") is None:
@@ -263,7 +342,7 @@ def run_e2e_test():
         blockchain.distributor_receive("PT-STAGE2-DEMO", "Checked and dispatched from Regional Warehouse")
 
     print("\n" + "=" * 60)
-    print("ALL END-TO-END WORKFLOW INTEGRATION TESTS PASSED (13/13)!")
+    print("ALL END-TO-END WORKFLOW INTEGRATION TESTS PASSED (14/14)!")
     print("=" * 60)
 
 

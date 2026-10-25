@@ -1,8 +1,9 @@
-
 import 'package:flutter/material.dart';
 
-import 'verify_screen.dart';
+import '../theme/app_theme.dart';
+import '../widgets/pharma_artwork.dart';
 import 'consumer/scan_screen.dart';
+import 'verify_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -10,9 +11,7 @@ class HomeScreen extends StatelessWidget {
   Future<void> _scanQr(BuildContext context) async {
     final scannedValue = await Navigator.push<String>(
       context,
-      MaterialPageRoute(
-        builder: (_) => const ScanScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const ScanScreen()),
     );
 
     if (!context.mounted ||
@@ -24,73 +23,83 @@ class HomeScreen extends StatelessWidget {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => VerifyScreen(
-          initialMedicineId: scannedValue.trim(),
-        ),
+        builder: (_) => VerifyScreen(initialMedicineId: scannedValue.trim()),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme;
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('PharmaTrace | Consumer'),
-        backgroundColor: color.primaryContainer,
-      ),
+      backgroundColor: AppColors.surface,
+      appBar: AppBar(title: const Text('Verify a Medicine')),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
+          constraints: const BoxConstraints(maxWidth: 440),
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.verified_user,
-                  size: 96,
-                  color: color.primary,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Check if your medicine is genuine',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 32),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => _scanQr(context),
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: const Padding(
-                      padding: EdgeInsets.all(14),
-                      child: Text('Scan QR code'),
+            child: Material(
+              color: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: const BorderSide(color: AppColors.hairline),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const ConsumerShieldArtwork(),
+                    const SizedBox(height: 22),
+                    const Text(
+                      'Verify Medicine Authenticity',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.ink,
+                        letterSpacing: -0.4,
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const VerifyScreen(),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Scan the package QR code or enter a batch ID.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14, color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 28),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.tealDark,
                         ),
-                      );
-                    },
-                    icon: const Icon(Icons.keyboard),
-                    label: const Padding(
-                      padding: EdgeInsets.all(14),
-                      child: Text('Enter batch ID'),
+                        onPressed: () => _scanQr(context),
+                        icon: const Icon(Icons.qr_code_scanner_rounded),
+                        label: const Text('Scan QR Code'),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const VerifyScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.keyboard_outlined),
+                        label: const Text('Enter Batch ID'),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
