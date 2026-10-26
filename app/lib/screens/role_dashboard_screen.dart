@@ -8,6 +8,9 @@ import 'home_screen.dart';
 import 'medicine_lookup_screen.dart';
 import 'organization_registration_screen.dart';
 import 'register_batch_screen.dart';
+import 'package:image_picker/image_picker.dart';
+import 'consumer/scan_screen.dart';
+import 'verify_screen.dart';
 
 class RoleDashboardScreen extends StatefulWidget {
   final UserRole role;
@@ -32,6 +35,8 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
   bool _receiptLoading = false;
   String? _receiptFeedback;
   bool _receiptSuccess = false;
+  String? _receiptTxHash;
+  String? _receiptBlockNumber;
 
   List<Map<String, dynamic>>? _liveUsers;
   bool _loadingUsers = false;
@@ -45,6 +50,9 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _receiptMedIdController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _fetchLiveUsers();
     _fetchBatches();
   }
@@ -241,6 +249,9 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.role == UserRole.consumer) {
+      return _buildConsumerDashboard(context);
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 860;
@@ -1178,6 +1189,57 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
   Widget _buildReceiptSection() {
     final isPharmacy = widget.role == UserRole.pharmacy;
     final stageTarget = isPharmacy ? 'Pharmacy Receipt' : 'Distributor Receipt';
+    final query = _receiptMedIdController.text.trim().toLowerCase();
+
+    Batch? matchedBatch;
+    if (query.isNotEmpty && _liveBatches != null) {
+      for (final b in _liveBatches!) {
+        if (b.id.toLowerCase() == query || b.medicineId.toLowerCase() == query) {
+          matchedBatch = b;
+          break;
+        }
+      }
+    }
+
+    bool canSubmit = true;
+    String? stageAdvisory;
+    Color advisoryColor = teal;
+
+    if (matchedBatch != null) {
+      if (!isPharmacy) {
+        if (matchedBatch.stage == 2) {
+          canSubmit = false;
+          stageAdvisory = 'Batch ${matchedBatch.id} has already been received by distributor. Current status: Stage 2 (With Distributor).';
+          advisoryColor = const Color(0xFFD97706);
+        } else if (matchedBatch.stage >= 3) {
+          canSubmit = false;
+          stageAdvisory = 'Batch ${matchedBatch.id} has already progressed to retail pharmacy (Stage 3).';
+          advisoryColor = const Color(0xFFD97706);
+        } else if (matchedBatch.stage == 1) {
+          stageAdvisory = 'Ready for receipt: ${matchedBatch.medicine} (${matchedBatch.quantity} units, Exp: ${matchedBatch.expiry}).';
+          advisoryColor = AppColors.tealDark;
+        }
+      } else {
+        if (matchedBatch.stage == 3) {
+          canSubmit = false;
+          stageAdvisory = 'Batch ${matchedBatch.id} has already been received by pharmacy. Current status: Stage 3 (In Pharmacy).';
+          advisoryColor = const Color(0xFFD97706);
+        } else if (matchedBatch.stage == 1) {
+          canSubmit = false;
+          stageAdvisory = 'Batch ${matchedBatch.id} is in Stage 1 (Manufactured). It must be received by a distributor first.';
+          advisoryColor = const Color(0xFFD97706);
+        } else if (matchedBatch.stage == 2) {
+          stageAdvisory = 'Ready for receipt: ${matchedBatch.medicine} from distributor.';
+          advisoryColor = AppColors.tealDark;
+        }
+      }
+
+      if (matchedBatch.recalled) {
+        canSubmit = false;
+        stageAdvisory = 'Cannot receive: Batch ${matchedBatch.id} has been recalled on-chain.';
+        advisoryColor = AppColors.danger;
+      }
+    }
 
     return _sectionCard(
       stageTarget,
@@ -1193,15 +1255,100 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                     ? AppColors.mintTint
                     : const Color(0xFFFEF2F2),
                 borderRadius: BorderRadius.circular(14),
-              ),
-              child: Text(
-                _receiptFeedback!,
-                style: TextStyle(
-                  color: _receiptSuccess ? teal : AppColors.danger,
-                  fontWeight: FontWeight.w600,
+                border: Border.all(
+                  color: _receiptSuccess
+                      ? teal.withValues(alpha: 0.3)
+                      : const Color(0xFFFCA5A5),
                 ),
               ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _receiptSuccess ? Icons.check_circle : Icons.error_outline,
+                        color: _receiptSuccess ? teal : AppColors.danger,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _receiptFeedback!,
+                          style: TextStyle(
+                            color: _receiptSuccess ? teal : AppColors.danger,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_receiptSuccess && _receiptTxHash != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Tx: ${_receiptTxHash!.substring(0, 10)}... (Block ${_receiptBlockNumber ?? "N/A"})',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11.5,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: teal,
+                        side: BorderSide(color: teal),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _receiptSuccess = false;
+                          _receiptFeedback = null;
+                          _receiptTxHash = null;
+                          _receiptBlockNumber = null;
+                        });
+                      },
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('Record Another Batch Receipt', style: TextStyle(fontSize: 12.5)),
+                    ),
+                  ],
+                ],
+              ),
             ),
+
+          if (stageAdvisory != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: advisoryColor.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: advisoryColor.withValues(alpha: 0.25)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    canSubmit ? Icons.info_outline : Icons.warning_amber_rounded,
+                    color: advisoryColor,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      stageAdvisory,
+                      style: TextStyle(
+                        color: advisoryColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
           TextField(
             controller: _receiptMedIdController,
             decoration: const InputDecoration(
@@ -1225,7 +1372,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
           SizedBox(
             height: 50,
             child: FilledButton(
-              onPressed: _receiptLoading
+              onPressed: (_receiptLoading || !canSubmit)
                   ? null
                   : () async {
                       final id = _receiptMedIdController.text.trim();
@@ -1238,6 +1385,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                       setState(() {
                         _receiptLoading = true;
                         _receiptFeedback = null;
+                        _receiptSuccess = false;
                       });
 
                       try {
@@ -1258,14 +1406,20 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                           );
                         }
 
+                        if (!mounted) return;
                         setState(() {
                           _receiptLoading = false;
                           _receiptSuccess = true;
                           _receiptFeedback =
-                              res['message'] ?? 'Receipt recorded on-chain.';
+                              res['message'] ?? 'Receipt confirmed on blockchain.';
+                          _receiptTxHash = res['transaction_hash']?.toString();
+                          _receiptBlockNumber = res['block_number']?.toString();
+                          _receiptMedIdController.clear();
+                          _receiptDetailsController.clear();
                         });
-                        _fetchBatches();
+                        await _fetchBatches();
                       } catch (e) {
+                        if (!mounted) return;
                         setState(() {
                           _receiptLoading = false;
                           _receiptSuccess = false;
@@ -1277,7 +1431,7 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
                       }
                     },
               child: Text(
-                _receiptLoading ? 'Recording...' : 'Confirm $stageTarget',
+                _receiptLoading ? 'Recording on-chain...' : 'Confirm $stageTarget',
               ),
             ),
           ),
@@ -1536,6 +1690,349 @@ class _RoleDashboardScreenState extends State<RoleDashboardScreen> {
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
   }
+
+
+  Future<void> _openConsumerScan() async {
+    final scannedValue = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const ScanScreen()),
+    );
+    if (!mounted || scannedValue == null || scannedValue.trim().isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => VerifyScreen(initialMedicineId: scannedValue.trim()),
+      ),
+    );
+  }
+
+  Future<void> _openConsumerUpload() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: ImageSource.gallery);
+    if (!mounted || image == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const VerifyScreen(initialIsLookup: true),
+      ),
+    );
+  }
+
+  Widget _buildConsumerDashboard(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.warmIvory,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              height: 70,
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border(bottom: BorderSide(color: AppColors.hairline)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.softMint,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.verified_user_rounded,
+                      color: AppColors.primaryTeal,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'PharmaTrace',
+                    style: TextStyle(
+                      color: AppColors.deepTeal,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.4,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.mintSoft,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Text(
+                      'Public Consumer Access',
+                      style: TextStyle(
+                        color: AppColors.deepTeal,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.deepTeal,
+                      side: const BorderSide(color: AppColors.hairline),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    ),
+                    onPressed: switchRole,
+                    icon: const Icon(Icons.logout_rounded, size: 16),
+                    label: const Text('Exit / Switch Role'),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 780),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(28),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [AppColors.deepTeal, AppColors.primaryTeal],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Consumer Medicine Portal',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 26,
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Trust Every Dose. Trace Every Batch. Verify packaging authenticity and confirmed on-chain supply-chain custody before taking your medication.',
+                                style: TextStyle(
+                                  color: AppColors.softMint,
+                                  fontSize: 14,
+                                  height: 1.45,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 28),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final wide = constraints.maxWidth >= 640;
+                            final card1 = _buildConsumerActionCard(
+                              title: 'Verify Your Medicine',
+                              subtitle:
+                                  'Scan the official PharmaTrace QR code on your medicine package or foil blister.',
+                              icon: Icons.qr_code_scanner_rounded,
+                              primary: true,
+                              actions: [
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 46,
+                                  child: FilledButton.icon(
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: AppColors.deepTeal,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: _openConsumerScan,
+                                    icon: const Icon(Icons.camera_alt_outlined, size: 18),
+                                    label: const Text(
+                                      'Scan QR with Camera',
+                                      style: TextStyle(fontWeight: FontWeight.w700),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 42,
+                                  child: OutlinedButton.icon(
+                                    onPressed: _openConsumerUpload,
+                                    icon: const Icon(Icons.photo_library_outlined, size: 18),
+                                    label: const Text('Upload QR Photo'),
+                                  ),
+                                ),
+                              ],
+                            );
+
+                            final card2 = _buildConsumerActionCard(
+                              title: 'Batch Lookup & Check',
+                              subtitle:
+                                  'Look up a batch ID on the blockchain, trace custody history, or upload package photos for optical verification.',
+                              icon: Icons.manage_search_rounded,
+                              primary: false,
+                              actions: [
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 46,
+                                  child: FilledButton.icon(
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: AppColors.primaryTeal,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => const VerifyScreen(initialIsLookup: true),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.search_rounded, size: 18),
+                                    label: const Text(
+                                      'Open Batch Lookup',
+                                      style: TextStyle(fontWeight: FontWeight.w700),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+
+                            if (wide) {
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: card1),
+                                  const SizedBox(width: 20),
+                                  Expanded(child: card2),
+                                ],
+                              );
+                            } else {
+                              return Column(
+                                children: [
+                                  card1,
+                                  const SizedBox(height: 18),
+                                  card2,
+                                ],
+                              );
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 28),
+                        Container(
+                          padding: const EdgeInsets.all(22),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: AppColors.hairline),
+                          ),
+                          child: const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.shield_outlined, color: AppColors.primaryTeal, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Patient Medicine Safety Guidelines',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.deepTeal,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                '• Always ensure the packaging has an intact security seal before opening.\n'
+                                '• Verify that the batch ID and expiry date printed on the foil strip match the outer carton.\n'
+                                '• Check that the retail pharmacy recorded in the custody journey matches where you purchased your medicine.\n'
+                                '• An unverified or unrecognized batch does not by itself prove a medicine is counterfeit, but warrants inquiry with your pharmacist.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.secondaryText,
+                                  height: 1.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConsumerActionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool primary,
+    required List<Widget> actions,
+  }) {
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: BorderSide(
+          color: primary ? AppColors.primaryTeal.withValues(alpha: 0.4) : AppColors.hairline,
+          width: primary ? 1.5 : 1.0,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: primary ? AppColors.softMint : const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                icon,
+                color: primary ? AppColors.deepTeal : AppColors.secondaryText,
+                size: 28,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: AppColors.ink,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppColors.muted,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ...actions,
+          ],
+        ),
+      ),
+    );
+  }
+
 }
 
 class _NavItem {

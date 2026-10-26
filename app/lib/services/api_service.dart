@@ -7,6 +7,18 @@ class TransferEvent {
   const TransferEvent(this.from, this.to, this.date);
 }
 
+class PackageImageUpload {
+  final List<int> bytes;
+  final String filename;
+  final String viewLabel;
+
+  const PackageImageUpload({
+    required this.bytes,
+    required this.filename,
+    required this.viewLabel,
+  });
+}
+
 class JourneyStage {
   final int stage;
   final String title;
@@ -132,6 +144,10 @@ class ApiException implements Exception {
 
 abstract class ApiService {
   Future<VerifyResult> verifyBatch(String id);
+  Future<Map<String, dynamic>> extractPackageFields(
+    List<int> imageBytes,
+    String filename,
+  );
 }
 
 class MockApiService implements ApiService {
@@ -145,6 +161,26 @@ class MockApiService implements ApiService {
     }
 
     return const VerifyResult(VerifyStatus.unknown);
+  }
+
+  @override
+  Future<Map<String, dynamic>> extractPackageFields(
+    List<int> imageBytes,
+    String filename,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 400));
+    return {
+      'success': true,
+      'fields': {
+        'medicine_name': 'Becosules Capsules',
+        'batch_number': '2623014N',
+        'manufacturer_name': 'Pfizer Limited',
+        'mfg_date': '01/2026',
+        'expiry_date': '06/2028',
+      },
+      'has_matching_batch': true,
+      'matching_batch_id': '2623014N',
+    };
   }
 }
 
@@ -457,6 +493,78 @@ class FlaskApiService implements ApiService {
     return data;
   }
 
+  @override
+  Future<Map<String, dynamic>> extractPackageFields(
+    List<int> imageBytes,
+    String filename,
+  ) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/api/ocr/extract-package'),
+    );
+
+    request.files.add(
+      http.MultipartFile.fromBytes('image', imageBytes, filename: filename),
+    );
+
+    final streamed = await request.send().timeout(const Duration(seconds: 30));
+    final response = await http.Response.fromStream(streamed);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        (data['error'] ?? 'Package text extraction failed.').toString(),
+        statusCode: response.statusCode,
+        data: data,
+      );
+    }
+
+    return data;
+  }
+
+  Future<Map<String, dynamic>> recordConsumerVerification({
+    required String medicineId,
+    String verdict = 'Verified',
+    String method = 'batch_lookup',
+    String details = '',
+  }) async {
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/api/consumer/record-verification'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'medicine_id': medicineId.trim(),
+            'verdict': verdict.trim(),
+            'method': method.trim(),
+            'details': details.trim(),
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        (data['error'] ?? 'Failed to record consumer verification.').toString(),
+        statusCode: response.statusCode,
+      );
+    }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> getBatchImages(String batchId) async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/api/batches/${Uri.encodeComponent(batchId)}/images'))
+        .timeout(const Duration(seconds: 10));
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        (data['error'] ?? 'Failed to retrieve batch images.').toString(),
+        statusCode: response.statusCode,
+      );
+    }
+    return data;
+  }
+
   // ---------------------------------------------------------------------------
   // ORGANIZATION & SUPPLY-CHAIN OPERATIONS
   // ---------------------------------------------------------------------------
@@ -466,9 +574,11 @@ class FlaskApiService implements ApiService {
     required String name,
     required String batch,
     required String expiry,
+    String? mfg,
     required int quantity,
     required List<int> imageBytes,
     required String filename,
+    List<PackageImageUpload>? packageImages,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -483,11 +593,24 @@ class FlaskApiService implements ApiService {
     request.fields['name'] = name.trim();
     request.fields['batch'] = batch.trim();
     request.fields['expiry'] = expiry.trim();
+    if (mfg != null && mfg.trim().isNotEmpty) {
+      request.fields['mfg'] = mfg.trim();
+    }
     request.fields['quantity'] = quantity.toString();
 
-    request.files.add(
-      http.MultipartFile.fromBytes('image', imageBytes, filename: filename),
-    );
+    if (packageImages != null && packageImages.isNotEmpty) {
+      for (int i = 0; i < packageImages.length; i++) {
+        final img = packageImages[i];
+        request.files.add(
+          http.MultipartFile.fromBytes('images', img.bytes, filename: img.filename),
+        );
+        request.fields['view_$i'] = img.viewLabel;
+      }
+    } else {
+      request.files.add(
+        http.MultipartFile.fromBytes('image', imageBytes, filename: filename),
+      );
+    }
 
     final streamed = await request.send().timeout(const Duration(seconds: 60));
     final response = await http.Response.fromStream(streamed);

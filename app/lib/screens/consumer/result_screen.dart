@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../services/api_service.dart';
+import '../../theme/app_theme.dart';
+import '../../widgets/pharma_artwork.dart';
 
 class ConsumerResultScreen extends StatelessWidget {
   final Batch batch;
@@ -14,41 +16,72 @@ class ConsumerResultScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final verdict = imageVerification?['verdict']?.toString() ?? 'Verified';
+    final verdict = imageVerification?['verdict']?.toString() ??
+        (batch.recalled
+            ? 'Suspicious'
+            : (batch.expired
+                ? 'Suspicious'
+                : (batch.stage < 3 ? 'Unverified' : 'Verified')));
+
     final isVerified = verdict == 'Verified';
     final isSuspicious = verdict == 'Suspicious';
 
     final badgeColor = isVerified
-        ? Colors.green
+        ? AppColors.tealDark
         : isSuspicious
-        ? Colors.orange
-        : Colors.red;
+            ? AppColors.warning
+            : const Color(0xFF64748B);
+
+    final String reasonText;
+    if (batch.recalled) {
+      reasonText = batch.recallReason.isNotEmpty
+          ? 'Notice: This batch has been recalled on the blockchain (${batch.recallReason}).'
+          : 'Notice: This batch has been recalled on the blockchain.';
+    } else if (batch.expired) {
+      reasonText = 'Notice: The registered expiry date (${batch.expiry}) has passed. Do not consume.';
+    } else if (isVerified) {
+      reasonText = 'Authentic blockchain registration and confirmed supply-chain custody verified.';
+    } else if (isSuspicious) {
+      reasonText = 'Discrepancies or warnings found between packaging evidence and blockchain record.';
+    } else {
+      reasonText = 'Verification evidence is pending or incomplete (e.g. custody transition pending at retail pharmacy).';
+    }
+
+    final mfrDisplay = batch.manufacturerName.isNotEmpty
+        ? batch.manufacturerName
+        : (batch.manufacturer != '0x0000000000000000000000000000000000000000' && batch.manufacturer.isNotEmpty
+            ? batch.manufacturer
+            : 'Manufacturer information unavailable');
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Verification Result')),
+      backgroundColor: AppColors.warmIvory,
+      appBar: AppBar(
+        title: const Text('Medicine Verification Result'),
+        backgroundColor: Colors.white,
+      ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 540),
+          constraints: const BoxConstraints(maxWidth: 600),
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
               Card(
                 color: badgeColor.withValues(alpha: 0.08),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(color: badgeColor.withValues(alpha: 0.4)),
+                  borderRadius: BorderRadius.circular(20),
+                  side: BorderSide(color: badgeColor.withValues(alpha: 0.35)),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(22),
                   child: Column(
                     children: [
                       Icon(
                         isVerified
                             ? Icons.verified
                             : isSuspicious
-                            ? Icons.warning_amber
-                            : Icons.cancel_outlined,
-                        size: 54,
+                                ? Icons.warning_amber_rounded
+                                : Icons.info_outline_rounded,
+                        size: 52,
                         color: badgeColor,
                       ),
                       const SizedBox(height: 12),
@@ -56,64 +89,108 @@ class ConsumerResultScreen extends StatelessWidget {
                         verdict.toUpperCase(),
                         style: TextStyle(
                           fontSize: 22,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w800,
                           color: badgeColor,
+                          letterSpacing: 0.5,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
                       Text(
-                        isVerified
-                            ? 'Both blockchain record and packaging match verified.'
-                            : isSuspicious
-                            ? 'Warning: Discrepancies found between packaging and blockchain records.'
-                            : 'Alert: Unverified or potentially counterfeit medicine.',
+                        reasonText,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
-                          fontSize: 13,
-                          color: Colors.black87,
+                          fontSize: 13.5,
+                          color: AppColors.ink,
+                          height: 1.4,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
               Card(
+                color: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  side: const BorderSide(color: AppColors.hairline),
+                ),
                 child: Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        batch.medicine,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              batch.medicine,
+                              style: const TextStyle(
+                                fontSize: 19,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.ink,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: AppColors.mintSoft,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Text(
+                              batch.stageName,
+                              style: const TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.deepTeal,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const Divider(height: 20),
+                      const Divider(height: 24),
                       _row('Batch ID', batch.id),
-                      _row('Manufacturer', batch.manufacturer),
+                      _row('Manufacturer', mfrDisplay),
                       _row('Expiry Date', batch.expiry),
-                      _row('Stage', batch.stageName),
-                      _row('Quantity', '${batch.quantity} units'),
+                      _row('Batch Units', '${batch.quantity} units'),
+                      if (batch.distributorName.isNotEmpty)
+                        _row('Distributor', batch.distributorName),
+                      if (batch.pharmacyName.isNotEmpty)
+                        _row('Pharmacy', batch.pharmacyName),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Supply-Chain History',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              for (final e in batch.history)
-                ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.local_shipping, color: Colors.teal),
-                  title: Text('${e.from} → ${e.to}'),
-                  subtitle: Text(e.date),
+              if (batch.journey.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                Card(
+                  color: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: const BorderSide(color: AppColors.hairline),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Supply-Chain Journey',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        VerticalJourneyTimeline(stages: batch.journey),
+                      ],
+                    ),
+                  ),
                 ),
+              ],
             ],
           ),
         ),
@@ -123,18 +200,25 @@ class ConsumerResultScreen extends StatelessWidget {
 
   Widget _row(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 120,
-            child: Text(label, style: const TextStyle(color: Colors.black54)),
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: AppColors.muted),
+            ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.ink,
+              ),
             ),
           ),
         ],

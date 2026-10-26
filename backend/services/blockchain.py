@@ -1,5 +1,7 @@
 """Talks to the smart contract (web3.py)."""
+from datetime import datetime, timezone
 import json
+import time
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -38,6 +40,53 @@ STATUS_NAMES = {0: "Pending", 1: "Active", 2: "Rejected"}
 
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 _contract = None
+VERIFICATIONS_STORE_PATH = Path(__file__).resolve().parent.parent / "data" / "consumer_verifications.json"
+
+
+def _load_consumer_verifications() -> dict[str, list[dict]]:
+    if not VERIFICATIONS_STORE_PATH.is_file():
+        return {}
+    try:
+        return json.loads(VERIFICATIONS_STORE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_consumer_verifications(store: dict[str, list[dict]]) -> None:
+    VERIFICATIONS_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VERIFICATIONS_STORE_PATH.write_text(json.dumps(store, indent=2), encoding="utf-8")
+
+
+def record_consumer_verification(medicine_id: str, verdict: str, details: str = "", method: str = "verification") -> dict:
+    """Persist an authentic consumer verification event for a medicine batch."""
+    norm_id = medicine_id.strip()
+    store = _load_consumer_verifications()
+    events = store.setdefault(norm_id, [])
+    now = int(time.time())
+    ev = {
+        "medicine_id": norm_id,
+        "timestamp": now,
+        "verdict": verdict,
+        "method": method,
+        "details": details,
+        "verified_at_utc": datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
+    events.append(ev)
+    _save_consumer_verifications(store)
+    return ev
+
+
+def get_consumer_verification(medicine_id: str) -> dict | None:
+    """Retrieve the latest persisted consumer verification event for a batch."""
+    norm_id = medicine_id.strip()
+    store = _load_consumer_verifications()
+    events = store.get(norm_id) or []
+    if not events:
+        for k, v in store.items():
+            if k.upper() == norm_id.upper() and v:
+                return v[-1]
+        return None
+    return events[-1]
 
 
 def is_connected() -> bool:
@@ -188,7 +237,36 @@ def build_record(names, raw):
     }
 
 
+
+ARCHIVED_BATCHES_FILE = Path(__file__).resolve().parent.parent / "data" / "archived_batches.json"
+
+
+def get_archived_batches() -> set:
+    """Returns a set of medicine/batch IDs that are archived or removed from active views."""
+    archived = {"TEST_MULTI_OVERFLOW"}
+    if ARCHIVED_BATCHES_FILE.exists():
+        try:
+            with open(ARCHIVED_BATCHES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    archived.update(str(x).strip() for x in data if x)
+        except Exception:
+            pass
+    return archived
+
+
+def is_batch_archived(medicine_id: str) -> bool:
+    """Checks whether a medicine ID or batch number is marked as archived."""
+    if not medicine_id:
+        return False
+    clean = str(medicine_id).strip()
+    archived = get_archived_batches()
+    return clean in archived or any(b.casefold() == clean.casefold() for b in archived)
+
 def read_record(medicine_id: str):
+    if is_batch_archived(medicine_id):
+        return None
+
     """
     Returns {"name","batch","manufacturer","ipfs_cid","expiry","recalled","expired",
     "recall_reason","raw"} or None if the medicine is not registered.
@@ -214,13 +292,22 @@ def read_record(medicine_id: str):
         record["expired"] = False
     if not record.get("id"):
         record["id"] = medicine_id
+    try:
+        from services import ipfs
+        manifest = ipfs.get_local_manifest(medicine_id) or (ipfs.get_local_manifest(record.get("batch", "")) if record.get("batch") else None)
+        if manifest:
+            record["total_images"] = manifest.get("total_images", len(manifest.get("images", [])))
+            record["manifest_cid"] = manifest.get("manifest_cid")
+            record["images"] = manifest.get("images", [])
+    except Exception:
+        pass
     return record
 
 
 def find_record(medicine_id: str):
     """Find a medicine by its registered ID or batch number."""
     query = medicine_id.strip()
-    if not query:
+    if not query or is_batch_archived(query):
         return None
 
     record = read_record(query)
@@ -264,7 +351,7 @@ def get_all_batches(stage: int = None, manufacturer: str = None) -> list:
         )
         for ev in reversed(events):
             med_id = ev["args"].get("id")
-            if not med_id or med_id in seen:
+            if not med_id or med_id in seen or is_batch_archived(med_id):
                 continue
             seen.add(med_id)
             record = read_record(med_id)
@@ -626,6 +713,7 @@ def read_audit_trail(medicine_id: str) -> dict:
 
     stages = read_stages(medicine_id)
     raw = record.get("raw", {})
+    actual_id = str(raw.get("id") or record.get("batch") or medicine_id)
     current_stage = int(record.get("stage", 1))
     mfr_addr = record.get("manufacturer", ZERO_ADDRESS)
     dist_addr = record.get("distributor", ZERO_ADDRESS)
@@ -750,6 +838,12 @@ def read_audit_trail(medicine_id: str) -> dict:
         except Exception:
             pass
 
+    consumer_ev = (
+        get_consumer_verification(actual_id)
+        or get_consumer_verification(medicine_id)
+        or get_consumer_verification(str(record.get("batch") or ""))
+    )
+
     journey = [
         {
             "stage": 1,
@@ -798,14 +892,22 @@ def read_audit_trail(medicine_id: str) -> dict:
             "title": "Consumer Verification",
             "organization": "Public Consumer Verification",
             "actor_address": "",
-            "completed": True,
-            "status": "Read-only query & off-chain analysis",
+            "completed": consumer_ev is not None,
+            "status": (
+                f"Verified by consumer ({consumer_ev['verdict']})"
+                if consumer_ev is not None
+                else "Pending consumer verification"
+            ),
             "is_on_chain": False,
-            "event_name": "VerificationQuery",
-            "timestamp": 0,
+            "event_name": "ConsumerVerificationRecorded" if consumer_ev is not None else "PendingVerification",
+            "timestamp": consumer_ev["timestamp"] if consumer_ev is not None else 0,
             "transaction_hash": "",
             "block_number": None,
-            "details": "On-chain provenance inspected. Upload physical packaging photo to perform off-chain OCR and visual similarity analysis.",
+            "details": (
+                f"Consumer verification recorded with verdict '{consumer_ev['verdict']}'. Method: {consumer_ev.get('method', 'verification')}."
+                if consumer_ev is not None
+                else "Awaiting consumer verification. Scan QR code or submit package photo to verify."
+            ),
         },
     ]
 

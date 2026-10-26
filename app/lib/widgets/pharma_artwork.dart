@@ -544,10 +544,10 @@ class _TimelineNodeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final completed = stage.completed || completedOverride;
+    final completed = stage.completed;
     final dotColor = completed
         ? (stage.isOnChain ? AppColors.tealDark : AppColors.navy)
-        : const Color(0xFFCBD5E1);
+        : const Color(0xFF94A3B8);
 
     return IntrinsicHeight(
       child: Row(
@@ -610,21 +610,30 @@ class _TimelineNodeRow extends StatelessWidget {
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: stage.isOnChain
-                              ? AppColors.mintSoft
-                              : const Color(0xFFE8EEF2),
+                          color: completed
+                              ? (stage.isOnChain
+                                  ? AppColors.mintSoft
+                                  : const Color(0xFFE8EEF2))
+                              : const Color(0xFFF1F5F9),
                           borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: completed
+                                ? Colors.transparent
+                                : const Color(0xFFCBD5E1),
+                          ),
                         ),
                         child: Text(
-                          stage.isOnChain
-                              ? 'On-chain record'
-                              : 'Off-chain check',
+                          completed
+                              ? (stage.isOnChain ? 'Confirmed on-chain' : 'Verified by Consumer')
+                              : 'Pending',
                           style: TextStyle(
                             fontSize: 10.5,
                             fontWeight: FontWeight.w600,
-                            color: stage.isOnChain
-                                ? AppColors.tealDark
-                                : AppColors.navy,
+                            color: completed
+                                ? (stage.isOnChain
+                                    ? AppColors.tealDark
+                                    : AppColors.navy)
+                                : const Color(0xFF64748B),
                           ),
                         ),
                       ),

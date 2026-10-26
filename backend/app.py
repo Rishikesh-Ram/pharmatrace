@@ -2,6 +2,8 @@
 import io
 import logging
 import os
+import re
+import time
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -95,13 +97,27 @@ def _build_explainable_verdict(
         found_e = ocr_result.get("found_expiry")
         e_status = ocr_result.get("expiry_status")
         exp_e = ocr_result.get("expected_expiry_month")
+        b_ev = ocr_result.get("batch_evidence")
+        e_ev = ocr_result.get("expiry_evidence")
+        qual = ocr_result.get("quality") or {}
 
         off_chain_analysis.append(
             f"OCR Batch Number: '{found_b or 'Not detected'}' vs Expected '{record.get('batch')}' ({b_status})."
+            + (f" {b_ev}" if b_ev else "")
         )
         off_chain_analysis.append(
             f"OCR Expiry Date: '{found_e or 'Not detected'}' vs Expected '{exp_e or 'N/A'}' ({e_status})."
+            + (f" {e_ev}" if e_ev else "")
         )
+        if qual:
+            sharp = qual.get("laplacian_variance", 0.0)
+            glare_pct = round(qual.get("glare_fraction", 0.0) * 100, 1)
+            off_chain_analysis.append(
+                f"Image Quality Assessment: Sharpness {sharp:.1f} ({'sharp' if not qual.get('is_blurry') else 'blurry'}), Glare {glare_pct}% ({'acceptable' if not qual.get('has_glare') else 'high reflection'}), Lighting {qual.get('lighting', 'normal')}."
+            )
+            for f in qual.get("feedback", []):
+                off_chain_analysis.append(f"Quality advisory: {f}")
+
         if b_status == "mismatch":
             mismatches.append(
                 f"Printed batch number '{found_b}' does not match registered batch '{record.get('batch')}'."
@@ -123,6 +139,10 @@ def _build_explainable_verdict(
         category = "Unable to verify"
         headline = "Unable to Complete Optical Verification"
         reasons.append("On-chain record is valid, but reference image comparison could not be completed.")
+    elif verdict == "Unverified":
+        category = "Unable to verify"
+        headline = "Insufficient Evidence — Unverified"
+        reasons.append("Evidence is insufficient or image was unreadable to complete verification.")
     elif verdict == "Verified" and not mismatches:
         category = "Verified"
         headline = "Verified Record & Packaging Evidence Passed"
@@ -484,7 +504,13 @@ def verify():
         )
 
     # (d) verdict
-    final_verdict = decide(True, chain_ok, image_ok)
+    # A low-quality, blurry, or unreadable image must not automatically be labelled counterfeit; label Unverified
+    quality = ocr_result.get("quality") or {}
+    if not quality.get("quality_acceptable", True) and not image_ok:
+        final_verdict = "Unverified"
+    else:
+        final_verdict = decide(True, chain_ok, image_ok)
+
     # If OCR detected a definite batch mismatch on the printed label, downgrade Verified -> Suspicious
     if final_verdict == "Verified" and ocr_result.get("batch_status") == "mismatch":
         final_verdict = "Suspicious"
@@ -500,6 +526,15 @@ def verify():
         ocr_result=ocr_result,
     )
 
+    # Record persisted consumer verification event
+    blockchain.record_consumer_verification(
+        actual_id,
+        verdict=final_verdict,
+        details=f"Optical score: {score}, OCR batch: {ocr_result.get('found_batch')} ({ocr_result.get('batch_status')})",
+        method="package_verification",
+    )
+    audit = blockchain.read_audit_trail(actual_id)
+
     return jsonify(
         verdict=final_verdict,
         medicine_id=actual_id,
@@ -514,6 +549,61 @@ def verify():
         explainable=explainable,
         journey=audit.get("journey", []),
         events=audit.get("events", []),
+    )
+
+
+@app.route("/api/ocr/extract-package", methods=["POST"])
+def extract_package():
+    """Extract printed medicine fields (name, batch, manufacturer, mfg date, expiry date)
+    from an uploaded package image without requiring a prior batch ID.
+    """
+    file = request.files.get("image")
+    if not file:
+        return jsonify(error="No image file provided in 'image' field."), 400
+
+    try:
+        uploaded = Image.open(io.BytesIO(file.read())).convert("RGB")
+    except Exception as exc:
+        return jsonify(error="Could not read uploaded image.", details=str(exc)), 400
+
+    try:
+        result = ocr.extract_package_fields(uploaded)
+        return jsonify(result), 200
+    except Exception as exc:
+        app.logger.exception("Failed to extract package fields")
+        return jsonify(error="OCR field extraction failed.", details=str(exc)), 500
+
+
+@app.route("/api/consumer/record-verification", methods=["POST"])
+def record_consumer_verification_endpoint():
+    """Explicitly records a consumer verification event for a medicine batch."""
+    data = request.get_json(silent=True) or request.form.to_dict()
+    medicine_id = data.get("medicine_id", "").strip()
+    verdict = data.get("verdict", "Verified").strip()
+    method = data.get("method", "batch_lookup").strip()
+    details = data.get("details", "").strip()
+
+    if not medicine_id:
+        return jsonify(error="medicine_id is required."), 400
+
+    record = blockchain.find_record(medicine_id)
+    if record is None:
+        return jsonify(error=f"Medicine '{medicine_id}' not found on blockchain."), 404
+
+    actual_id = record["raw"].get("id") or record.get("id") or medicine_id
+    ev = blockchain.record_consumer_verification(
+        actual_id,
+        verdict=verdict,
+        details=details,
+        method=method,
+    )
+    audit = blockchain.read_audit_trail(actual_id)
+
+    return jsonify(
+        success=True,
+        event=ev,
+        journey=audit.get("journey", []),
+        message="Consumer verification recorded successfully.",
     )
 
 
@@ -596,9 +686,28 @@ def health():
 # MEDICINE REGISTRATION (MANUFACTURER)
 # =====================================================================
 
+def _parse_revert_message(exc: Exception) -> str:
+    msg = str(exc)
+    m = re.search(r"reverted with reason string ['\"]([^'\"]+)['\"]", msg)
+    if m:
+        reason = m.group(1).strip()
+        friendly = {
+            "Wrong stage": "Smart contract rejected the transition: the batch is not in the required supply-chain stage.",
+            "Not your manufacturer": "Smart contract rejected the transition: this distributor is not registered under the manufacturer of this batch.",
+            "Not your distributor": "Smart contract rejected the transition: this pharmacy is not registered under the distributor of this batch.",
+            "Medicine has expired": "Smart contract rejected the transition: the medicine has passed its on-chain expiry date.",
+            "Medicine is recalled": "Smart contract rejected the transition: this medicine batch has been recalled.",
+            "Not approved for this role": "Smart contract access denied: sender is not active or approved for this role on-chain.",
+        }
+        return friendly.get(reason, f"Blockchain revert: {reason}")
+    if "revert" in msg.lower():
+        return "Transaction execution reverted by the smart contract."
+    return msg
+
+
 @app.route("/register", methods=["POST"])
 def register():
-    """Upload a medicine reference image to IPFS and register it on-chain."""
+    """Upload medicine package images (up to 10) to IPFS, create package manifest, and register on-chain."""
     signer_key, _, signer_addr, auth_err = _resolve_authorized_signer(("manufacturer",))
     if auth_err is not None:
         return auth_err
@@ -608,11 +717,29 @@ def register():
     batch = request.form.get("batch", "").strip()
     expiry = request.form.get("expiry", "").strip()
     quantity_str = request.form.get("quantity", "100").strip()
-    file = request.files.get("image")
 
-    if not all([medicine_id, name, batch, expiry, file]):
+    # Collect up to 10 images from multipart request
+    files = []
+    if "images" in request.files:
+        files = request.files.getlist("images")
+    elif "image" in request.files:
+        files = [request.files.get("image")]
+    else:
+        for key in sorted(request.files.keys()):
+            if key.startswith("image"):
+                files.extend(request.files.getlist(key))
+
+    files = [f for f in files if f and f.filename]
+
+    if not all([medicine_id, name, batch, expiry]) or len(files) == 0:
         return jsonify(
-            error="Required fields: medicine_id, name, batch, expiry, image."
+            error="Required fields: medicine_id, name, batch, expiry, and at least one package image."
+        ), 400
+
+    if len(files) > 10:
+        return jsonify(
+            error=f"A maximum of 10 package images can be uploaded per batch (received {len(files)}).",
+            code="MAX_IMAGES_EXCEEDED",
         ), 400
 
     try:
@@ -620,12 +747,42 @@ def register():
     except ValueError:
         quantity = 100
 
-    try:
-        expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
-    except ValueError:
+    # Parse expiry supporting MM/YYYY, MM-YYYY, YYYY-MM-DD, YYYY-MM
+    expiry_date = None
+    for fmt in ("%m/%Y", "%m-%Y", "%Y-%m-%d", "%Y-%m"):
+        try:
+            dt = datetime.strptime(expiry, fmt)
+            if fmt in ("%m/%Y", "%m-%Y", "%Y-%m"):
+                import calendar
+                _, last_day = calendar.monthrange(dt.year, dt.month)
+                expiry_date = dt.replace(day=last_day).date()
+            else:
+                expiry_date = dt.date()
+            break
+        except ValueError:
+            pass
+
+    if expiry_date is None:
         return jsonify(
-            error=f"Invalid expiry date received: {expiry!r}. Use YYYY-MM-DD."
+            error=f"Invalid expiry date received: {expiry!r}. Use MM/YYYY or YYYY-MM-DD."
         ), 400
+
+    # Parse manufacturing date if provided (supporting past batches like 01/2026)
+    mfg = (request.form.get("mfg") or request.form.get("mfg_date") or "").strip()
+    mfg_date = None
+    if mfg:
+        for fmt in ("%m/%Y", "%m-%Y", "%Y-%m-%d", "%Y-%m"):
+            try:
+                dt = datetime.strptime(mfg, fmt)
+                mfg_date = dt.replace(day=1).date()
+                break
+            except ValueError:
+                pass
+
+        if mfg_date and expiry_date <= mfg_date:
+            return jsonify(
+                error="Expiry date must be later than manufacturing date."
+            ), 400
 
     try:
         expiry_timestamp = int(
@@ -638,24 +795,93 @@ def register():
 
         if expiry_timestamp <= int(datetime.now(timezone.utc).timestamp()):
             return jsonify(
-                error="Expiry date must be today or in the future."
+                error="Expiry date must be in the future."
             ), 400
 
-        image_bytes = file.read()
-        if not image_bytes:
-            return jsonify(error="The uploaded image is empty."), 400
+        # Read view labels if provided (e.g. view_0, view_1, or views list)
+        raw_views = request.form.getlist("views")
+        if not raw_views:
+            raw_views = [request.form.get(f"view_{i}", "").strip() for i in range(len(files))]
 
-        image_cid = ipfs.upload_image(
-            image_bytes,
-            file.filename or "reference.jpg",
-        )
+        # Validate and prepare each image
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
+        image_records = []
+        uploaded_cids = []
 
+        for i, file_item in enumerate(files):
+            file_bytes = file_item.read()
+            if not file_bytes:
+                return jsonify(error=f"Image {i + 1} ('{file_item.filename}') is empty."), 400
+
+            if len(file_bytes) > 10 * 1024 * 1024:
+                return jsonify(error=f"Image {i + 1} exceeds 10MB size limit."), 400
+
+            ext = os.path.splitext(file_item.filename)[1].lower()
+            if ext not in allowed_extensions:
+                return jsonify(
+                    error=f"Unsupported format '{ext}' for image {i + 1}. Allowed: JPG, PNG, WebP."
+                ), 400
+
+            try:
+                test_img = Image.open(io.BytesIO(file_bytes))
+                test_img.verify()
+            except Exception as img_err:
+                return jsonify(
+                    error=f"Invalid or corrupted image data in file {i + 1} ('{file_item.filename}'): {img_err}"
+                ), 400
+
+            # Determine view label
+            view_label = raw_views[i] if i < len(raw_views) and raw_views[i] else (
+                "Primary Package Photo" if i == 0 else f"Package View {i + 1}"
+            )
+
+            # Upload to Pinata / IPFS
+            cid = ipfs.upload_image(file_bytes, filename=file_item.filename or f"package_{i + 1}.jpg")
+            uploaded_cids.append(cid)
+            image_records.append({
+                "index": i,
+                "cid": cid,
+                "filename": file_item.filename,
+                "view": view_label,
+                "size_bytes": len(file_bytes),
+                "url": f"/api/reference-image/{medicine_id}" if i == 0 else f"{ipfs.PINATA_GATEWAY}{cid}",
+            })
+
+        primary_image_cid = uploaded_cids[0]
+
+        # Build stable package manifest
+        manifest_payload = {
+            "batch_id": batch,
+            "medicine_id": medicine_id,
+            "medicine_name": name,
+            "mfg": mfg,
+            "expiry": expiry,
+            "primary_image_cid": primary_image_cid,
+            "total_images": len(image_records),
+            "created_at": int(time.time()),
+            "manufacturer_address": signer_addr,
+            "images": image_records,
+        }
+
+        # Save local manifest & pin manifest to IPFS
+        ipfs.save_local_manifest(batch, manifest_payload)
+        ipfs.save_local_manifest(medicine_id, manifest_payload)
+        manifest_cid = None
+        try:
+            manifest_cid = ipfs.upload_json(manifest_payload, name=f"{batch}_manifest.json")
+            manifest_payload["manifest_cid"] = manifest_cid
+            ipfs.save_local_manifest(batch, manifest_payload)
+            ipfs.save_local_manifest(medicine_id, manifest_payload)
+        except Exception as pin_err:
+            log.warning("Could not pin manifest JSON to IPFS: %s", pin_err)
+
+        # Register on-chain using primary image CID (100% compatible with existing contract)
         tx_hash = blockchain.register_medicine(
             medicine_id,
             name,
             batch,
             expiry_timestamp,
-            image_cid,
+            primary_image_cid,
             quantity=quantity,
             private_key=signer_key,
         )
@@ -666,10 +892,14 @@ def register():
             medicine_id=medicine_id,
             name=name,
             batch=batch,
+            mfg=mfg,
             expiry=expiry,
             quantity=quantity,
             manufacturer=signer_addr,
-            image_cid=image_cid,
+            image_cid=primary_image_cid,
+            manifest_cid=manifest_cid,
+            total_images=len(image_records),
+            images=image_records,
             transaction_hash=tx_hash,
             block_number=tx_meta.get("block_number"),
             confirmation_status=tx_meta.get("confirmation_status", "Confirmed"),
@@ -678,7 +908,44 @@ def register():
 
     except Exception as exc:
         app.logger.exception("Medicine registration failed")
-        return jsonify(error=f"{type(exc).__name__}: {exc}"), 500
+        friendly_err = _parse_revert_message(exc)
+        return jsonify(error=f"{type(exc).__name__}: {friendly_err}"), 500
+
+
+@app.route("/api/batches/<path:batch_id>/images", methods=["GET"])
+@app.route("/api/medicine-images/<path:batch_id>", methods=["GET"])
+def get_batch_images(batch_id):
+    """Retrieve all uploaded package images and manifest for a registered batch."""
+    clean_id = batch_id.strip()
+    manifest = ipfs.get_local_manifest(clean_id)
+    if not manifest:
+        rec = blockchain.find_record(clean_id)
+        if rec and rec.get("ipfs_cid"):
+            return jsonify(
+                batch_id=clean_id,
+                medicine_name=rec.get("name", ""),
+                total_images=1,
+                primary_image_cid=rec["ipfs_cid"],
+                manifest_cid=None,
+                images=[{
+                    "index": 0,
+                    "cid": rec["ipfs_cid"],
+                    "filename": "reference.jpg",
+                    "view": "Primary Package View",
+                    "size_bytes": 0,
+                    "url": f"/api/reference-image/{clean_id}",
+                }],
+            )
+        return jsonify(error=f"No packaging images found for '{clean_id}'."), 404
+
+    return jsonify(
+        batch_id=manifest.get("batch_id", clean_id),
+        medicine_name=manifest.get("medicine_name", ""),
+        total_images=manifest.get("total_images", len(manifest.get("images", []))),
+        primary_image_cid=manifest.get("primary_image_cid"),
+        manifest_cid=manifest.get("manifest_cid"),
+        images=manifest.get("images", []),
+    )
 
 
 # =====================================================================
@@ -918,6 +1185,60 @@ def distributor_receive():
             return jsonify(error=f"Medicine '{medicine_id}' not found on blockchain."), 404
 
         actual_id = record["raw"]["id"]
+        current_stage = int(record.get("stage") or 1)
+
+        # 1. On-chain stage validation
+        if current_stage == 2:
+            stages = blockchain.read_stages(actual_id)
+            dist_info = stages.get("distributor", {})
+            dist_actor = dist_info.get("actor") or record.get("distributor", "Authorized Distributor")
+            dist_time = dist_info.get("timestamp")
+            time_str = f" at {datetime.fromtimestamp(dist_time, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}" if dist_time else ""
+            return jsonify(
+                error=f"Medicine batch '{medicine_id}' has already been received by distributor ({dist_actor}){time_str}. Current status: Stage 2 (With Distributor).",
+                code="ALREADY_RECEIVED",
+                current_stage=2,
+                distributor=dist_actor,
+            ), 400
+
+        if current_stage >= 3:
+            return jsonify(
+                error=f"Medicine batch '{medicine_id}' has already progressed to retail pharmacy (Stage 3).",
+                code="STAGE_EXCEEDED",
+                current_stage=current_stage,
+            ), 400
+
+        if current_stage != 1:
+            return jsonify(
+                error=f"Cannot record distributor receipt: batch '{medicine_id}' is at Stage {current_stage}, but Stage 1 (Manufactured) is required.",
+                code="INVALID_STAGE",
+                current_stage=current_stage,
+            ), 400
+
+        # 2. Distributor-Manufacturer linkage validation
+        chain_u = blockchain.get_user(signer_addr)
+        dist_linked_mfr = (chain_u.get("manufacturer") or "").lower()
+        batch_mfr = (record.get("manufacturer") or "").lower()
+        if dist_linked_mfr and batch_mfr and dist_linked_mfr != batch_mfr:
+            return jsonify(
+                error=f"Distributor ({signer_addr}) is registered under manufacturer {dist_linked_mfr}, but batch '{medicine_id}' was manufactured by {batch_mfr}.",
+                code="MANUFACTURER_MISMATCH",
+            ), 400
+
+        # 3. Recall validation
+        if record.get("recalled"):
+            return jsonify(
+                error=f"Cannot receive batch '{medicine_id}': medicine is recalled ({record.get('recall_reason') or 'Safety Recall'}).",
+                code="BATCH_RECALLED",
+            ), 400
+
+        # 4. Expiry validation
+        if record.get("expired"):
+            return jsonify(
+                error=f"Cannot receive batch '{medicine_id}': medicine has expired.",
+                code="BATCH_EXPIRED",
+            ), 400
+
         tx_hash = blockchain.distributor_receive(actual_id, details=details, private_key=signer_key)
         tx_meta = blockchain.get_tx_meta(tx_hash)
         return jsonify(
@@ -932,7 +1253,9 @@ def distributor_receive():
         )
     except Exception as exc:
         app.logger.exception("Distributor receive failed")
-        return jsonify(error=f"{type(exc).__name__}: {exc}"), 500
+        friendly_err = _parse_revert_message(exc)
+        status_code = 400 if "Smart contract" in friendly_err or "revert" in friendly_err.lower() else 500
+        return jsonify(error=friendly_err, code="TRANSACTION_FAILED"), status_code
 
 
 @app.route("/api/pharmacy/receive", methods=["POST"])
@@ -955,6 +1278,60 @@ def pharmacy_receive():
             return jsonify(error=f"Medicine '{medicine_id}' not found on blockchain."), 404
 
         actual_id = record["raw"]["id"]
+        current_stage = int(record.get("stage") or 1)
+
+        # 1. On-chain stage validation
+        if current_stage == 3:
+            stages = blockchain.read_stages(actual_id)
+            pharm_info = stages.get("pharmacy", {})
+            pharm_actor = pharm_info.get("actor") or record.get("pharmacy", "Authorized Pharmacy")
+            pharm_time = pharm_info.get("timestamp")
+            time_str = f" at {datetime.fromtimestamp(pharm_time, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}" if pharm_time else ""
+            return jsonify(
+                error=f"Medicine batch '{medicine_id}' has already been received by pharmacy ({pharm_actor}){time_str}. Current status: Stage 3 (In Pharmacy).",
+                code="ALREADY_RECEIVED",
+                current_stage=3,
+                pharmacy=pharm_actor,
+            ), 400
+
+        if current_stage == 1:
+            return jsonify(
+                error=f"Cannot record pharmacy receipt: batch '{medicine_id}' is still in Stage 1 (Manufactured). It must first be received by an authorized distributor (Stage 2).",
+                code="PREVIOUS_STAGE_PENDING",
+                current_stage=1,
+            ), 400
+
+        if current_stage != 2:
+            return jsonify(
+                error=f"Cannot record pharmacy receipt: batch '{medicine_id}' is at Stage {current_stage}, but Stage 2 (With Distributor) is required.",
+                code="INVALID_STAGE",
+                current_stage=current_stage,
+            ), 400
+
+        # 2. Pharmacy-Distributor linkage validation
+        chain_u = blockchain.get_user(signer_addr)
+        pharm_linked_dist = (chain_u.get("distributor") or "").lower()
+        batch_dist = (record.get("distributor") or "").lower()
+        if pharm_linked_dist and batch_dist and pharm_linked_dist != batch_dist:
+            return jsonify(
+                error=f"Pharmacy ({signer_addr}) is registered under distributor {pharm_linked_dist}, but batch '{medicine_id}' is currently held by distributor {batch_dist}.",
+                code="DISTRIBUTOR_MISMATCH",
+            ), 400
+
+        # 3. Recall validation
+        if record.get("recalled"):
+            return jsonify(
+                error=f"Cannot receive batch '{medicine_id}': medicine is recalled ({record.get('recall_reason') or 'Safety Recall'}).",
+                code="BATCH_RECALLED",
+            ), 400
+
+        # 4. Expiry validation
+        if record.get("expired"):
+            return jsonify(
+                error=f"Cannot receive batch '{medicine_id}': medicine has expired.",
+                code="BATCH_EXPIRED",
+            ), 400
+
         tx_hash = blockchain.pharmacy_receive(actual_id, details=details, private_key=signer_key)
         tx_meta = blockchain.get_tx_meta(tx_hash)
         return jsonify(
@@ -969,7 +1346,9 @@ def pharmacy_receive():
         )
     except Exception as exc:
         app.logger.exception("Pharmacy receive failed")
-        return jsonify(error=f"{type(exc).__name__}: {exc}"), 500
+        friendly_err = _parse_revert_message(exc)
+        status_code = 400 if "Smart contract" in friendly_err or "revert" in friendly_err.lower() else 500
+        return jsonify(error=friendly_err, code="TRANSACTION_FAILED"), status_code
 
 
 @app.route("/api/stages/<path:medicine_id>", methods=["GET"])
