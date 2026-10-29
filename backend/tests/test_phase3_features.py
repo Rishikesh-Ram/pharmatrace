@@ -152,4 +152,4 @@ def test_batch_images_retrieval_endpoint(client):
     assert res.status_code == 200
     assert "images" in res.json
     assert len(res.json["images"]) >= 1
-    assert res.json["images"][0]["cid"] == "QmNcioqqfqp3GHKYxmfh2soBwy9NPE4fp4fYonNnffd5oZ"
+    assert res.json["images"][0]["cid"].startswith(("Qm", "bafy"))

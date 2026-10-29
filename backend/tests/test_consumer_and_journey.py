@@ -32,7 +32,7 @@ def test_recognized_batch_lookup(client):
     assert data["found"] is True
     assert data["medicine_id"] == "2623014N"
     assert "journey" in data
-    assert len(data["journey"]) == 4
+    assert len(data["journey"]) == 3  # Exactly 3 supply-chain stages: Manufacturer, Distributor, Pharmacy
 
     # Stage 1 (Manufactured) must be completed
     assert data["journey"][0]["completed"] is True
@@ -61,12 +61,16 @@ def test_consumer_record_verification_endpoint(client):
     assert res.status_code == 200
     assert res.json["success"] is True
 
-    # Retrieve audit trail and check stage 4
+    # Verify consumer verification is saved and retrievable
+    cv = blockchain.get_consumer_verification(batch_id)
+    assert cv is not None
+    assert cv["verdict"] == "Verified"
+    assert cv["method"] == "batch_lookup"
+
+    # Verify that supply-chain journey has strictly 3 stages and does not show Consumer Verification as a 4th stage
     trail = blockchain.read_audit_trail(batch_id)
-    stage4 = trail["journey"][3]
-    assert stage4["stage"] == 4
-    assert stage4["completed"] is True
-    assert "Verified by consumer" in stage4["status"]
+    assert len(trail["journey"]) == 3
+    assert [s["stage"] for s in trail["journey"]] == [1, 2, 3]
 
 
 # =====================================================================
@@ -93,9 +97,10 @@ def test_journey_stages_derive_strictly_from_state():
     assert journey[2]["completed"] is True
     assert journey[2]["is_on_chain"] is True
 
-    # Stage 4: Consumer verification
-    assert journey[3]["stage"] == 4
-    assert journey[3]["is_on_chain"] is False
+    # Journey must contain strictly the 3 supply-chain custody stages (no Consumer Verification stage)
+    assert len(journey) == 3
+    assert [s["stage"] for s in journey] == [1, 2, 3]
+    assert all(s["title"] in ("Manufacturer Registration", "Distributor Receipt & Custody", "Pharmacy Receipt & Retail Stock") for s in journey)
 
 
 def test_unverified_batch_has_pending_consumer_stage():
@@ -182,9 +187,10 @@ def test_extract_package_fields_endpoint(client):
     assert "fields" in data
     assert "medicine_name" in data["fields"]
     assert "batch_number" in data["fields"]
-    assert "manufacturer_name" in data["fields"]
     assert "mfg_date" in data["fields"]
     assert "expiry_date" in data["fields"]
+    assert "manufacturer_name" not in data["fields"]
+    assert len(data["fields"]) == 4
     assert "quality" in data
     assert "timing_ms" in data
 
@@ -199,3 +205,33 @@ def test_archived_test_medicine_excluded_from_api(client):
     lookup_res = client.get("/lookup/TEST_MULTI_OVERFLOW")
     assert lookup_res.status_code == 404
     assert lookup_res.json.get("found") is False
+
+
+# =====================================================================
+# 5. EXPIRY DATE COMPARISON & 4-FIELD VERIFICATION
+# =====================================================================
+
+def test_expiry_date_exclusive_boundary_comparison():
+    """Package expiry 06/2027 matches registered on-chain 2027-07-01 exclusive boundary."""
+    # 1. Test backend _record_expiry_month
+    assert ocr._record_expiry_month({"expiry": "2027-07-01"}) == "2027-06"
+    assert ocr._record_expiry_month({"expiry": 1814313600}) == "2027-06"
+    assert ocr._record_expiry_month({"expiry": "1814313600"}) == "2027-06"
+    assert ocr._record_expiry_month({"expiry": "2027-06-30"}) == "2027-06"
+    assert ocr._record_expiry_month({"expiry": "06/2027"}) == "2027-06"
+
+    # 2. Test consensus voting with printed 06/2027 against registered 2027-07-01
+    variants = [
+        "EXP: 06/2027\nBATCH: 2623014N",
+        "Expiry: 06/2027\nB.No: 2623014N",
+        "EXPIRY: JUN 2027\nLOT: 2623014N",
+    ]
+    res = ocr.extract_consensus_fields(
+        variants,
+        expected_batch="2623014N",
+        expected_expiry=ocr._record_expiry_month({"expiry": "2027-07-01"}),
+    )
+    assert res["expiry_status"] == "match"
+    assert res["found_expiry"] == "2027-06"
+    assert res["batch_status"] == "match"
+    assert res["found_batch"] == "2623014N"

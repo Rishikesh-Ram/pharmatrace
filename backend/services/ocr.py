@@ -1,6 +1,6 @@
 """OCR extraction and reference comparison for PharmaTrace with multi-variant consensus and image quality diagnostics."""
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 import os
 import re
@@ -328,7 +328,13 @@ def _record_expiry_month(record: dict) -> str | None:
     if value is None:
         return None
 
-    # Blockchain adapters may expose a Unix timestamp.
+    # Blockchain adapters may expose a Unix timestamp (int, float, or numeric string).
+    if isinstance(value, str) and value.isdigit():
+        try:
+            value = int(value)
+        except ValueError:
+            pass
+
     if isinstance(value, (int, float)):
         try:
             dt = datetime.fromtimestamp(value, tz=timezone.utc)
@@ -336,12 +342,27 @@ def _record_expiry_month(record: dict) -> str | None:
             # subtracting 12 hours yields the actual registration month.
             if dt.day == 1 and dt.hour == 0 and dt.minute == 0:
                 dt = datetime.fromtimestamp(value - 43200, tz=timezone.utc)
-            value = dt.date().isoformat()
+            return f"{dt.year:04d}-{dt.month:02d}"
         except (OverflowError, OSError, ValueError):
             return None
 
-    # Handle ISO dates and month/year strings.
-    return _normalise_month_date(str(value))
+    s = str(value).strip()
+    # Check for ISO dates (YYYY-MM-DD)
+    iso_match = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", s)
+    if iso_match:
+        year, month, day = map(int, iso_match.groups())
+        # If registered date has day 1 (exclusive boundary convention for month-end),
+        # the previous day yields the intended expiry month (e.g. 2027-07-01 -> 2027-06).
+        if day == 1:
+            try:
+                prev_date = date(year, month, day) - timedelta(days=1)
+                return f"{prev_date.year:04d}-{prev_date.month:02d}"
+            except ValueError:
+                pass
+        return f"{year:04d}-{month:02d}"
+
+    # Handle other month/year strings.
+    return _normalise_month_date(s)
 
 
 def extract_consensus_fields(
@@ -586,12 +607,11 @@ def analyse(img: Image.Image, record: dict) -> dict:
 
 def extract_package_fields(img: Image.Image, timeout: float = 8.5) -> dict:
     """
-    Extracts the 5 printed medicine package fields:
+    Extracts the 4 printed medicine package fields:
     1. Medicine name
     2. Batch number
-    3. Manufacturer name
-    4. Manufacturing date (MM/YYYY)
-    5. Expiry date (MM/YYYY)
+    3. Manufacturing date (MM/YYYY)
+    4. Expiry date (MM/YYYY)
     Includes image quality diagnostics and checks for matching on-chain records.
     """
     t_start = time.perf_counter()
@@ -665,31 +685,6 @@ def extract_package_fields(img: Image.Image, timeout: float = 8.5) -> dict:
                 matched_name = cleaned
                 break
 
-    # 5. Manufacturer name matching
-    matched_mfr = None
-    for b in registered_batches:
-        mfr_name = b.get("manufacturer_name") or ""
-        if mfr_name and len(mfr_name) > 3 and mfr_name.lower() in low:
-            matched_mfr = mfr_name
-            break
-
-    if not matched_mfr:
-        mfr_re = re.compile(
-            r"\b(?:mfd\.?\s*by|mfg\.?\s*by|manufactured\s+by|marketed\s+by|packed\s+by)"
-            r"[\s:.\-]+([A-Za-z0-9\s,\.\-&]{3,40})(?=\n|$|\.\s|[0-9]{6}|Plot|Phase|Industrial)",
-            re.I
-        )
-        mfr_match = mfr_re.search(combined_text)
-        if mfr_match:
-            matched_mfr = mfr_match.group(1).strip()
-        else:
-            for line in combined_text.splitlines():
-                cl = line.strip()
-                if any(w in cl.lower() for w in ["laboratories", "pharma ", "pharmaceuticals", "ltd", "limited"]):
-                    if len(cl) <= 50 and not any(k in cl.upper() for k in ["EXP", "MFG", "BATCH", "MRP"]):
-                        matched_mfr = cl
-                        break
-
     # Look up matching on-chain record if batch or name was extracted
     matching_record = None
     try:
@@ -711,7 +706,6 @@ def extract_package_fields(img: Image.Image, timeout: float = 8.5) -> dict:
         "fields": {
             "medicine_name": matched_name,
             "batch_number": top_batch,
-            "manufacturer_name": matched_mfr,
             "mfg_date": top_mfg,
             "expiry_date": top_exp,
         },

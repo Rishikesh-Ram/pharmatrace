@@ -299,6 +299,7 @@ def read_record(medicine_id: str):
             record["total_images"] = manifest.get("total_images", len(manifest.get("images", [])))
             record["manifest_cid"] = manifest.get("manifest_cid")
             record["images"] = manifest.get("images", [])
+            record["mfg"] = manifest.get("mfg") or manifest.get("mfg_date", "")
     except Exception:
         pass
     return record
@@ -705,7 +706,7 @@ def _resolve_org_name(address: str) -> str:
 
 
 def read_audit_trail(medicine_id: str) -> dict:
-    """Build a complete, factual on-chain audit trail and 4-stage journey timeline for a medicine."""
+    """Build a complete, factual on-chain audit trail and 3-stage supply-chain custody journey for a medicine."""
     contract = _get_contract()
     record = read_record(medicine_id)
     if not record:
@@ -886,29 +887,7 @@ def read_audit_trail(medicine_id: str) -> dict:
             "transaction_hash": pharm_ev_meta.get("tx_hash", ""),
             "block_number": pharm_ev_meta.get("block_number"),
             "details": stages["pharmacy"].get("details") if current_stage >= 3 else "Batch has not yet been received by a retail pharmacy.",
-        },
-        {
-            "stage": 4,
-            "title": "Consumer Verification",
-            "organization": "Public Consumer Verification",
-            "actor_address": "",
-            "completed": consumer_ev is not None,
-            "status": (
-                f"Verified by consumer ({consumer_ev['verdict']})"
-                if consumer_ev is not None
-                else "Pending consumer verification"
-            ),
-            "is_on_chain": False,
-            "event_name": "ConsumerVerificationRecorded" if consumer_ev is not None else "PendingVerification",
-            "timestamp": consumer_ev["timestamp"] if consumer_ev is not None else 0,
-            "transaction_hash": "",
-            "block_number": None,
-            "details": (
-                f"Consumer verification recorded with verdict '{consumer_ev['verdict']}'. Method: {consumer_ev.get('method', 'verification')}."
-                if consumer_ev is not None
-                else "Awaiting consumer verification. Scan QR code or submit package photo to verify."
-            ),
-        },
+        }
     ]
 
     return {

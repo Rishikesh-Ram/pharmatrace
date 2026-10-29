@@ -133,21 +133,6 @@ class ConsumerResultScreen extends StatelessWidget {
                               ),
                             ),
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: AppColors.mintSoft,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Text(
-                              batch.stageName,
-                              style: const TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.deepTeal,
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                       const Divider(height: 24),

@@ -456,6 +456,7 @@ def verify():
         "manufacturer": record["manufacturer"],
         "batch": record["batch"],
         "expiry": record["expiry"],
+        "mfg": record.get("mfg", ""),
         "quantity": record.get("quantity", 0),
         "stage": record.get("stage", 1),
         "recalled": record["recalled"],
@@ -554,7 +555,7 @@ def verify():
 
 @app.route("/api/ocr/extract-package", methods=["POST"])
 def extract_package():
-    """Extract printed medicine fields (name, batch, manufacturer, mfg date, expiry date)
+    """Extract printed medicine fields (name, batch, mfg date, expiry date)
     from an uploaded package image without requiring a prior batch ID.
     """
     file = request.files.get("image")
@@ -650,6 +651,7 @@ def lookup(medicine_id):
             manufacturer=record["manufacturer"],
             manufacturer_name=audit.get("organizations", {}).get("manufacturer_name", ""),
             expiry=record["expiry"],
+            mfg=record.get("mfg", ""),
             expired=record["expired"],
             recalled=record["recalled"],
             recall_reason=record["recall_reason"],

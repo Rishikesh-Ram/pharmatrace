@@ -278,7 +278,7 @@ def _run_e2e_steps():
     assert data_id["found"] is True
     assert data_id["stage"] == 3
     assert len(data_id["history"]) == 3
-    assert len(data_id["journey"]) == 4
+    assert len(data_id["journey"]) == 3
     assert len(data_id["events"]) >= 3
     assert "Central Hub" in data_id["stages"]["distributor"]["details"]
     assert "Apollo Retail" in data_id["stages"]["pharmacy"]["details"]
@@ -313,7 +313,7 @@ def _run_e2e_steps():
     print(f"[INFO] OCR Detected Batch:   {verdict_data.get('ocr', {}).get('found_batch')}")
     assert verdict_data.get("verdict") in ("Verified", "Suspicious"), "Unexpected verdict"
     assert "explainable" in verdict_data
-    assert len(verdict_data.get("journey", [])) == 4
+    assert len(verdict_data.get("journey", [])) == 3
     print("[PASS] 12. Multi-factor verification pipeline & explainable verdict evaluated successfully.")
 
     # 13. Counterfeit / Unregistered ID Detection

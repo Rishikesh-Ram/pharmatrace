@@ -53,6 +53,7 @@ class Batch {
   final String id, medicine, manufacturer, expiry;
   final String medicineId;
   final String manufacturerName;
+  final String mfg;
   final int quantity;
   final List<TransferEvent> history;
   final bool expired, recalled;
@@ -79,6 +80,7 @@ class Batch {
     this.history, {
     this.medicineId = '',
     this.manufacturerName = '',
+    this.mfg = '',
     this.expired = false,
     this.recalled = false,
     this.recallReason = '',
@@ -174,7 +176,6 @@ class MockApiService implements ApiService {
       'fields': {
         'medicine_name': 'Becosules Capsules',
         'batch_number': '2623014N',
-        'manufacturer_name': 'Pfizer Limited',
         'mfg_date': '01/2026',
         'expiry_date': '06/2028',
       },
@@ -263,10 +264,10 @@ class FlaskApiService implements ApiService {
 
     if (date == null) return 'Not recorded';
 
-    final local = date.toLocal();
-    return '${local.year.toString().padLeft(4, '0')}-'
-        '${local.month.toString().padLeft(2, '0')}-'
-        '${local.day.toString().padLeft(2, '0')}';
+    final d = date.isUtc ? date : date.toUtc();
+    return '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
   }
 
   List<JourneyStage> parseJourney(dynamic rawJourney) {
@@ -436,6 +437,7 @@ class FlaskApiService implements ApiService {
         history,
         medicineId: medId,
         manufacturerName: (data['manufacturer_name'] ?? '').toString(),
+        mfg: (data['mfg'] ?? data['mfg_date'] ?? '').toString(),
         expired: data['expired'] == true,
         recalled: data['recalled'] == true,
         recallReason: (data['recall_reason'] ?? '').toString(),
@@ -808,6 +810,7 @@ class FlaskApiService implements ApiService {
         (map['quantity'] as num?)?.toInt() ?? 0,
         const [],
         medicineId: medId,
+        mfg: (map['mfg'] ?? map['mfg_date'] ?? '').toString(),
         expired: map['expired'] == true,
         recalled: map['recalled'] == true,
         recallReason: (map['recall_reason'] ?? '').toString(),

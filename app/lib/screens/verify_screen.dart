@@ -586,7 +586,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
                       ),
                       SizedBox(height: 2),
                       Text(
-                        'Review or correct the 5 printed fields below before searching PharmaTrace.',
+                        'Review or correct the 4 printed fields below before searching PharmaTrace.',
                         style: TextStyle(fontSize: 12.5, color: AppColors.muted),
                       ),
                     ],
@@ -632,27 +632,18 @@ class _VerifyScreenState extends State<VerifyScreen> {
             ),
             const SizedBox(height: 12),
 
-            // 3. Manufacturer Name
+            // 3. Manufacturing Date
             _buildFieldEditor(
-              label: '3. Manufacturer Name',
-              controller: _mfrNameController,
-              icon: Icons.factory_outlined,
-              hint: 'Unable to read (e.g. Pfizer Limited)',
-            ),
-            const SizedBox(height: 12),
-
-            // 4. Manufacturing Date
-            _buildFieldEditor(
-              label: '4. Manufacturing Date (MM/YYYY)',
+              label: '3. Manufacturing Date (MM/YYYY)',
               controller: _mfgDateController,
               icon: Icons.calendar_today_outlined,
               hint: 'Unable to read (e.g. 01/2026)',
             ),
             const SizedBox(height: 12),
 
-            // 5. Expiry Date
+            // 4. Expiry Date
             _buildFieldEditor(
-              label: '5. Expiry Date (MM/YYYY)',
+              label: '4. Expiry Date (MM/YYYY)',
               controller: _expiryDateController,
               icon: Icons.event_busy_outlined,
               hint: 'Unable to read (e.g. 06/2028)',
@@ -1084,21 +1075,6 @@ class _VerifyScreenState extends State<VerifyScreen> {
                         ],
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: AppColors.mintSoft,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        b.stageName,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.deepTeal,
-                        ),
-                      ),
-                    ),
                   ],
                 ),
                 const Divider(height: 24),
@@ -1122,9 +1098,9 @@ class _VerifyScreenState extends State<VerifyScreen> {
                   _row('Reference IPFS CID', b.ipfsCid),
                 const SizedBox(height: 20),
 
-                // 5-Field Comparison Table (Extracted vs Registered)
+                // 4-Field Comparison Table (Extracted vs Registered)
                 if (_showExtractedReview || _imageResult != null) ...[
-                  _buildFiveFieldComparisonTable(b),
+                  _buildFourFieldComparisonTable(b),
                   const SizedBox(height: 24),
                 ],
 
@@ -1148,10 +1124,101 @@ class _VerifyScreenState extends State<VerifyScreen> {
     );
   }
 
-  Widget _buildFiveFieldComparisonTable(Batch b) {
+  bool? _compareDates(String extracted, String registered, {bool isExpiry = false}) {
+    final extStr = extracted.trim();
+    final regStr = registered.trim();
+    if (extStr.isEmpty) return null;
+    if (regStr.isEmpty || regStr == 'Registered on-chain') return true;
+
+    final extParts = _parseDateParts(extStr);
+    final regParts = _parseDateParts(regStr);
+
+    if (extParts == null || regParts == null) {
+      final dExt = extStr.replaceAll(RegExp(r'[^0-9]'), '');
+      final dReg = regStr.replaceAll(RegExp(r'[^0-9]'), '');
+      return dExt.isNotEmpty && (dReg.contains(dExt) || dExt.contains(dReg));
+    }
+
+    int regEffectiveYear = regParts.year;
+    int regEffectiveMonth = regParts.month;
+
+    // Exclusive upper-bound convention for expiry:
+    // Stored on-chain timestamp on day 1 (e.g. 2027-07-01 00:00:00 UTC) represents
+    // the exclusive boundary for the previous month (i.e. valid through end of June 2027).
+    if (isExpiry && regParts.day == 1) {
+      if (regEffectiveMonth == 1) {
+        regEffectiveYear -= 1;
+        regEffectiveMonth = 12;
+      } else {
+        regEffectiveMonth -= 1;
+      }
+    }
+
+    // When extracted date provides month/year precision (MM/YYYY):
+    if (extParts.isMonthYearOnly || regParts.isMonthYearOnly) {
+      return extParts.year == regEffectiveYear && extParts.month == regEffectiveMonth;
+    }
+
+    // When registered date is exclusive boundary on day 1, any day in the effective month matches
+    if (isExpiry && regParts.day == 1) {
+      return extParts.year == regEffectiveYear && extParts.month == regEffectiveMonth;
+    }
+
+    return extParts.year == regParts.year &&
+        extParts.month == regParts.month &&
+        extParts.day == regParts.day;
+  }
+
+  static _DateParts? _parseDateParts(String str) {
+    final s = str.trim();
+    // 1. MM/YYYY or MM-YYYY
+    final myMatch = RegExp(r'^(\d{1,2})[-/](\d{4})$').firstMatch(s);
+    if (myMatch != null) {
+      final m = int.tryParse(myMatch.group(1)!) ?? 0;
+      final y = int.tryParse(myMatch.group(2)!) ?? 0;
+      if (m >= 1 && m <= 12 && y > 1900) {
+        return _DateParts(year: y, month: m, isMonthYearOnly: true);
+      }
+    }
+
+    // 2. YYYY-MM or YYYY/MM
+    final ymMatch = RegExp(r'^(\d{4})[-/](\d{1,2})$').firstMatch(s);
+    if (ymMatch != null) {
+      final y = int.tryParse(ymMatch.group(1)!) ?? 0;
+      final m = int.tryParse(ymMatch.group(2)!) ?? 0;
+      if (m >= 1 && m <= 12 && y > 1900) {
+        return _DateParts(year: y, month: m, isMonthYearOnly: true);
+      }
+    }
+
+    // 3. YYYY-MM-DD
+    final isoMatch = RegExp(r'^(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(s);
+    if (isoMatch != null) {
+      final y = int.tryParse(isoMatch.group(1)!) ?? 0;
+      final m = int.tryParse(isoMatch.group(2)!) ?? 0;
+      final d = int.tryParse(isoMatch.group(3)!) ?? 0;
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y > 1900) {
+        return _DateParts(year: y, month: m, day: d, isMonthYearOnly: false);
+      }
+    }
+
+    // 4. DD/MM/YYYY or DD-MM-YYYY
+    final dmyMatch = RegExp(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})').firstMatch(s);
+    if (dmyMatch != null) {
+      final d = int.tryParse(dmyMatch.group(1)!) ?? 0;
+      final m = int.tryParse(dmyMatch.group(2)!) ?? 0;
+      final y = int.tryParse(dmyMatch.group(3)!) ?? 0;
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y > 1900) {
+        return _DateParts(year: y, month: m, day: d, isMonthYearOnly: false);
+      }
+    }
+
+    return null;
+  }
+
+  Widget _buildFourFieldComparisonTable(Batch b) {
     final extractedName = _medicineNameController.text.trim();
     final extractedBatch = _batchNumberController.text.trim();
-    final extractedMfr = _mfrNameController.text.trim();
     final extractedMfg = _mfgDateController.text.trim();
     final extractedExp = _expiryDateController.text.trim();
 
@@ -1195,21 +1262,14 @@ class _VerifyScreenState extends State<VerifyScreen> {
               ),
               const Divider(height: 1),
               _comparisonRow(
-                field: 'Manufacturer',
-                extracted: extractedMfr,
-                registered: b.manufacturerName.isNotEmpty ? b.manufacturerName : 'Authorized Manufacturer',
-                match: extractedMfr.isEmpty
-                    ? null
-                    : (b.manufacturerName.isNotEmpty &&
-                        (b.manufacturerName.toLowerCase().contains(extractedMfr.toLowerCase()) ||
-                            extractedMfr.toLowerCase().contains(b.manufacturerName.toLowerCase()))),
-              ),
-              const Divider(height: 1),
-              _comparisonRow(
                 field: 'Mfg Date',
                 extracted: extractedMfg,
-                registered: 'Registered on-chain',
-                match: extractedMfg.isNotEmpty ? true : null,
+                registered: b.mfg.isNotEmpty ? b.mfg : 'Registered on-chain',
+                match: extractedMfg.isEmpty
+                    ? null
+                    : (b.mfg.isNotEmpty
+                        ? _compareDates(extractedMfg, b.mfg, isExpiry: false)
+                        : true),
               ),
               const Divider(height: 1),
               _comparisonRow(
@@ -1218,7 +1278,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
                 registered: b.expiry,
                 match: extractedExp.isEmpty
                     ? null
-                    : (extractedExp == b.expiry || b.expiry.contains(extractedExp) || extractedExp.contains(b.expiry)),
+                    : _compareDates(extractedExp, b.expiry, isExpiry: true),
               ),
             ],
           ),
@@ -1649,4 +1709,18 @@ class _VerifyScreenState extends State<VerifyScreen> {
       ),
     );
   }
+}
+
+class _DateParts {
+  final int year;
+  final int month;
+  final int? day;
+  final bool isMonthYearOnly;
+
+  const _DateParts({
+    required this.year,
+    required this.month,
+    this.day,
+    required this.isMonthYearOnly,
+  });
 }
